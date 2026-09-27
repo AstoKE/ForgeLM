@@ -12,9 +12,10 @@ understand, debug and extend everything in this repo.
 
 - ✅ **Sprint 0: Engineering setup.** Package, `forgelm` CLI, FastAPI `/health`, pytest,
   ruff, docs.
-- ⏳ **Next: Sprint 1, Tokenizer Playground.** Char tokenizer (encode/decode, vocab, stats),
-  then BPE. Expose it through `forgelm tokenize` and `POST /tokenize`. Start with a concept
-  briefing.
+- ✅ **Sprint 1a: Character tokenizer.** `forgelm.tokenizer.CharTokenizer`, `analyze()`,
+  `forgelm tokenize`, `POST /tokenize`.
+- ⏳ **Next: Sprint 1b, BPE from scratch** (byte-level, train merges on a corpus). Reuse the
+  playground and compare chars/token against the char tokenizer. Start with a concept briefing.
 
 Update this section at the end of every sprint.
 

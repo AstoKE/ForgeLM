@@ -38,3 +38,27 @@ def test_serve_starts_uvicorn_with_our_app(monkeypatch):
 
     assert main(["serve", "--port", "9000"]) == 0
     assert calls == {"app": "forgelm.api:app", "host": "127.0.0.1", "port": 9000, "reload": False}
+
+
+def test_tokenize_prints_tokens_and_roundtrip(capsys):
+    assert main(["tokenize", "hi"]) == 0
+
+    out = capsys.readouterr().out
+    assert "tokens:  ['h', 'i']" in out
+    assert "round-trip: OK" in out
+
+
+def test_tokenize_with_corpus_file_shows_unknowns(tmp_path, capsys):
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("hello", encoding="utf-8")
+
+    assert main(["tokenize", "hello!", "--corpus", str(corpus)]) == 0
+    assert "round-trip: FAILED, 1 unknown" in capsys.readouterr().out
+
+
+def test_tokenize_missing_corpus_file_fails(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["tokenize", "hi", "--corpus", str(tmp_path / "nope.txt")])
+
+    assert exc.value.code == 2
+    assert "cannot read corpus file" in capsys.readouterr().err

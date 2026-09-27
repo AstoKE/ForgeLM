@@ -1,6 +1,6 @@
 # ForgeLM architecture
 
-_Last updated: Sprint 0_
+_Last updated: Sprint 1a_
 
 ## Principle: thin adapters around core logic
 
@@ -24,14 +24,18 @@ _Last updated: Sprint 0_
 | Module | Role |
 |---|---|
 | `forgelm/__init__.py` | Package marker and `__version__` (read from installed metadata) |
-| `forgelm/api.py` | FastAPI `app`; `GET /health` |
-| `forgelm/cli.py` | `forgelm` command; `--version`, `serve` |
+| `forgelm/api.py` | FastAPI `app`; `GET /health`, `POST /tokenize` |
+| `forgelm/cli.py` | `forgelm` command; `--version`, `serve`, `tokenize` |
+| `forgelm/tokenizer/char.py` | `CharTokenizer` (vocab from corpus, `<unk>` = id 0) and `analyze()` |
+
+Both `tokenize` adapters follow the same path:
+`input → CharTokenizer.from_corpus(corpus) → analyze(tokenizer, text) → Analysis → print / JSON`
 
 ## Planned modules
 
 ```
 src/forgelm/
-├─ tokenizer/   Sprint 1   char tokenizer, BPE
+├─ tokenizer/   Sprint 1b  BPE (char tokenizer done)
 ├─ models/      Sprint 2-3 bigram, MiniGPT (PyTorch)
 ├─ training/    Sprint 4   training loop, checkpoints, metrics
 ├─ inference/   Sprint 5   sampling, backends (own model, Ollama, HF)
