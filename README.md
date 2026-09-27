@@ -12,7 +12,7 @@ Each sprint adds one concept to the same product. What I learned in each one is 
 | Sprint | Feature | Status |
 |---|---|---|
 | 0 | Engineering setup: package, CLI, API, tests, lint | ✅ |
-| 1 | Tokenizer playground: char tokenizer → BPE | ⏳ |
+| 1 | Tokenizer playground: char tokenizer ✅ → BPE | ⏳ |
 | 2 | Tiny language model: bigram | |
 | 3 | Transformer / MiniGPT from scratch | |
 | 4 | Training and inference dashboard | |
@@ -40,6 +40,8 @@ On macOS/Linux, activate with `source .venv/bin/activate` instead.
 forgelm --version
 forgelm serve            # http://127.0.0.1:8000/health, docs at /docs
 forgelm serve --reload   # auto-restart while developing
+forgelm tokenize "hello!"                     # vocab built from the text itself
+forgelm tokenize "hello!" --corpus notes.txt  # vocab from a file; unseen chars → <unk>
 ```
 
 ## Development
