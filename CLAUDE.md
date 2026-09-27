@@ -14,8 +14,14 @@ understand, debug and extend everything in this repo.
   ruff, docs.
 - ✅ **Sprint 1a: Character tokenizer.** `forgelm.tokenizer.CharTokenizer`, `analyze()`,
   `forgelm tokenize`, `POST /tokenize`.
-- ⏳ **Next: Sprint 1b, BPE from scratch** (byte-level, train merges on a corpus). Reuse the
-  playground and compare chars/token against the char tokenizer. Start with a concept briefing.
+- ✅ **Sprint 1b: Byte-level BPE.** `BPETokenizer`, `Tokenizer` protocol, `--tokenizer bpe`
+  ([ADR 0002](docs/decisions/0002-tokenizer-interface-and-bpe.md)).
+- ⏳ **Next: Sprint 2, Tiny language model (bigram).** Next-token prediction, logits, softmax,
+  cross-entropy loss. First version in plain Python (counting), then PyTorch. Needs saving and
+  loading the tokenizer so ids stay stable. Start with a concept briefing.
+
+Known environment note: on Windows, piped output uses the legacy code page (cp1254) and garbles
+non-ASCII characters. Set `PYTHONUTF8=1`.
 
 Update this section at the end of every sprint.
 
@@ -24,6 +30,12 @@ Update this section at the end of every sprint.
 0 Setup · 1 Tokenizer · 2 Tiny LM (bigram) · 3 MiniGPT from scratch · 4 Training dashboard ·
 5 Open-source LLM (Ollama/llama.cpp/HF) · 6 LoRA/QLoRA · 7 RAG v1 · 8 RAG v2 (hybrid, rerank) ·
 9 Agents (tools for daily tasks) · 10 Eval & observability · 11 Production deployment
+
+## Language
+
+Explain things, write summaries and ask quiz questions in **Turkish**, keeping important
+technical terms in English (token, vocabulary, merge, embedding...). Code, comments, commit
+messages and repo docs stay in English.
 
 ## Session loop
 

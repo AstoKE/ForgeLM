@@ -6,7 +6,7 @@ Like api.py, this only parses input and calls into the rest of the package.
 import argparse
 
 from forgelm import __version__
-from forgelm.tokenizer import Analysis, CharTokenizer, analyze
+from forgelm.tokenizer import Analysis, analyze, build_tokenizer
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -25,6 +25,10 @@ def build_parser() -> argparse.ArgumentParser:
     tokenize.add_argument(
         "--corpus",
         help="UTF-8 file to build the vocabulary from (default: the text itself).",
+    )
+    tokenize.add_argument("--tokenizer", choices=["char", "bpe"], default="char")
+    tokenize.add_argument(
+        "--merges", type=int, default=50, help="Number of BPE merges to learn (bpe only)."
     )
 
     return parser
@@ -57,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "tokenize":
+        if args.merges < 0:
+            parser.error("--merges must be >= 0")
         if args.corpus is None:
             corpus = args.text
         else:
@@ -65,7 +71,8 @@ def main(argv: list[str] | None = None) -> int:
                     corpus = f.read()
             except OSError as exc:
                 parser.error(f"cannot read corpus file: {exc}")  # exits with code 2
-        print(format_analysis(analyze(CharTokenizer.from_corpus(corpus), args.text)))
+        tokenizer = build_tokenizer(args.tokenizer, corpus, args.merges)
+        print(format_analysis(analyze(tokenizer, args.text)))
         return 0
 
     parser.print_help()

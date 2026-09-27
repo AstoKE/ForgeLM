@@ -1,6 +1,6 @@
 # ForgeLM architecture
 
-_Last updated: Sprint 1a_
+_Last updated: Sprint 1b_
 
 ## Principle: thin adapters around core logic
 
@@ -26,16 +26,18 @@ _Last updated: Sprint 1a_
 | `forgelm/__init__.py` | Package marker and `__version__` (read from installed metadata) |
 | `forgelm/api.py` | FastAPI `app`; `GET /health`, `POST /tokenize` |
 | `forgelm/cli.py` | `forgelm` command; `--version`, `serve`, `tokenize` |
-| `forgelm/tokenizer/char.py` | `CharTokenizer` (vocab from corpus, `<unk>` = id 0) and `analyze()` |
+| `forgelm/tokenizer/base.py` | `Tokenizer` protocol: `encode`, `decode`, `tokens`, `vocab_size`, `unk_id` |
+| `forgelm/tokenizer/char.py` | `CharTokenizer` (vocab from corpus, `<unk>` = id 0) |
+| `forgelm/tokenizer/bpe.py` | `BPETokenizer`: byte-level BPE, `train(corpus, num_merges)` ([ADR 0002](decisions/0002-tokenizer-interface-and-bpe.md)) |
+| `forgelm/tokenizer/analysis.py` | `build_tokenizer(kind, corpus, merges)` and `analyze()`, shared by the CLI and API |
 
 Both `tokenize` adapters follow the same path:
-`input → CharTokenizer.from_corpus(corpus) → analyze(tokenizer, text) → Analysis → print / JSON`
+`input → build_tokenizer(kind, corpus, merges) → analyze(tokenizer, text) → Analysis → print / JSON`
 
 ## Planned modules
 
 ```
 src/forgelm/
-├─ tokenizer/   Sprint 1b  BPE (char tokenizer done)
 ├─ models/      Sprint 2-3 bigram, MiniGPT (PyTorch)
 ├─ training/    Sprint 4   training loop, checkpoints, metrics
 ├─ inference/   Sprint 5   sampling, backends (own model, Ollama, HF)
