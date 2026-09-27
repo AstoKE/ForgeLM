@@ -67,3 +67,63 @@ Sprint 1b (BPE on bytes) fixes this.
 
 ### Open questions
 - _(fill in)_
+
+---
+
+## Sprint 1b: Byte-level BPE from scratch (2026-09-27)
+
+### Concepts
+- UTF-8 bytes as the base vocabulary (256 ids): **no OOV and no `<unk>`**. `İ` is 2 bytes and 👍🏽 is 8
+- The BPE training loop: count adjacent pairs → merge the most frequent into a new id → repeat
+- A trained BPE tokenizer is an **ordered list of merges**. Later merges build on earlier ones
+  (`aa` → `aaa` → `aaab`)
+- Encoding replays merges in the order they were learned (lowest id first). It ignores
+  frequencies in the new text
+- `vocab_size = 256 + merges learned`, a hyperparameter that trades sequence length against
+  embedding table size
+- `typing.Protocol` (structural typing): `CharTokenizer` and `BPETokenizer` both satisfy
+  `Tokenizer` without inheriting from it
+- API input limits (`max_length`, `le=`) protect the server from expensive requests
+
+### What we built
+- `BPETokenizer.train/encode/decode/tokens`, `get_pair_counts`, `merge`
+- `Tokenizer` protocol, plus `build_tokenizer()` and `analyze()` moved to `analysis.py`
+- `forgelm tokenize --tokenizer bpe --merges N`; the API gets `tokenizer` and `num_merges`
+  (0–1000) fields
+- 24 new tests (49 total)
+
+### Experiment: 300 merges trained on our own docs (~11 KB) vs GPT tokenizers
+
+| Tokenizer | vocab | "the tokenizer learns merges" | "İstanbul çok güzel" |
+|---|---|---|---|
+| ForgeLM char | 109 | 1.00 chars/token | 1.00 |
+| ForgeLM BPE, 0 merges | 256 | 1.00 | **0.86** (bytes > chars) |
+| ForgeLM BPE, 300 merges | 556 | 3.00 (`the ` `tokeniz` `er ` `learn`…) | 1.12 |
+| GPT-2 (`tiktoken`) | 50k | 4.50 | 2.00 (`İ`, `ç`, `ü` still split into bytes) |
+| GPT-4o `o200k_base` | 200k | 6.75 (`the` ` tokenizer` ` learns` ` merges`) | 4.50 (` çok` ` güzel`) |
+
+Takeaways:
+- The tokenizer reflects its training corpus. Our English docs never taught Turkish merges.
+  GPT-2 was English-heavy, and GPT-4o's tokenizer learned Turkish words.
+- GPT tokens *start* with a space (` token`), while ours *end* with one (`the `).
+  That's pre-tokenization (regex split before BPE), which we left out on purpose.
+- Our first merges included `'    '` (code indentation) and `'\xe2\x94'`
+  (part of the `─` box-drawing character in our diagrams): the corpus's quirks become tokens.
+- Training 300 merges on 11 KB took ~0.5 s. Naive BPE is O(merges × corpus length).
+
+### Mistakes / surprises
+- My prediction for "aaabdaaabac" after 1 merge was 2 tokens. The actual result is **9**:
+  one merge only replaces the single most frequent pair `(a, a)`, and merges don't overlap
+  (`aaab` → `[aa, a, b]`).
+- ruff B905: `zip(ids, ids[1:])` pairs lists of different lengths on purpose.
+  `itertools.pairwise` states the intent.
+- Windows + pipes: `forgelm tokenize "İç" | grep ...` printed `�`. With output piped, Python on
+  Windows encodes stdout as the legacy code page (**cp1254** on Turkish Windows), not UTF-8.
+  Fix: `$env:PYTHONUTF8 = "1"` (Linux uses UTF-8 by default).
+- _(fill in)_
+
+### Lessons
+- _(fill in, in your own words)_
+
+### Open questions
+- _(fill in)_

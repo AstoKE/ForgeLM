@@ -56,6 +56,26 @@ def test_tokenize_with_corpus_file_shows_unknowns(tmp_path, capsys):
     assert "round-trip: FAILED, 1 unknown" in capsys.readouterr().out
 
 
+def test_tokenize_with_bpe_roundtrips_unseen_characters(tmp_path, capsys):
+    corpus = tmp_path / "english.txt"
+    corpus.write_text("the quick brown fox", encoding="utf-8")
+
+    args = ["tokenize", "İstanbul", "--tokenizer", "bpe", "--corpus", str(corpus)]
+    assert main(args) == 0
+
+    out = capsys.readouterr().out
+    assert "unknown 0" in out
+    assert "round-trip: OK" in out
+
+
+def test_tokenize_negative_merges_fails(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["tokenize", "hi", "--tokenizer", "bpe", "--merges", "-1"])
+
+    assert exc.value.code == 2
+    assert "--merges must be >= 0" in capsys.readouterr().err
+
+
 def test_tokenize_missing_corpus_file_fails(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         main(["tokenize", "hi", "--corpus", str(tmp_path / "nope.txt")])

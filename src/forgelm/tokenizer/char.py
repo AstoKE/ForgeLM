@@ -4,13 +4,13 @@ The simplest possible tokenizer. It is useful because it makes the core ideas
 visible: vocabulary, encode/decode, round-trip, and out-of-vocabulary (OOV) text.
 """
 
-from dataclasses import dataclass
-
 UNK = "<unk>"
 UNK_ID = 0
 
 
 class CharTokenizer:
+    unk_id = UNK_ID
+
     def __init__(self, vocab: list[str]) -> None:
         # The list index *is* the token id: vocab[3] is the token with id 3.
         if not vocab or vocab[UNK_ID] != UNK:
@@ -44,34 +44,3 @@ class CharTokenizer:
             if not 0 <= i < self.vocab_size:
                 raise ValueError(f"token id {i} is outside vocab (size {self.vocab_size})")
         return "".join(self.itos[i] for i in ids)
-
-
-@dataclass(frozen=True)
-class Analysis:
-    """Everything the playground shows about one piece of text."""
-
-    tokens: list[str]
-    ids: list[int]
-    decoded: str
-    num_chars: int
-    num_tokens: int
-    vocab_size: int
-    unknown_count: int
-    chars_per_token: float
-    roundtrip_ok: bool
-
-
-def analyze(tokenizer: CharTokenizer, text: str) -> Analysis:
-    ids = tokenizer.encode(text)
-    decoded = tokenizer.decode(ids)
-    return Analysis(
-        tokens=tokenizer.tokens(text),
-        ids=ids,
-        decoded=decoded,
-        num_chars=len(text),
-        num_tokens=len(ids),
-        vocab_size=tokenizer.vocab_size,
-        unknown_count=ids.count(UNK_ID),
-        chars_per_token=len(text) / len(ids) if ids else 0.0,
-        roundtrip_ok=decoded == text,
-    )
