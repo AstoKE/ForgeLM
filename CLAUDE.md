@@ -16,9 +16,16 @@ understand, debug and extend everything in this repo.
   `forgelm tokenize`, `POST /tokenize`.
 - ✅ **Sprint 1b: Byte-level BPE.** `BPETokenizer`, `Tokenizer` protocol, `--tokenizer bpe`
   ([ADR 0002](docs/decisions/0002-tokenizer-interface-and-bpe.md)).
-- ⏳ **Next: Sprint 2, Tiny language model (bigram).** Next-token prediction, logits, softmax,
-  cross-entropy loss. First version in plain Python (counting), then PyTorch. Needs saving and
-  loading the tokenizer so ids stay stable. Start with a concept briefing.
+- ✅ **Sprint 2a: Counting bigram.** `forgelm.models.BigramModel`, `softmax`, JSON checkpoints
+  ([ADR 0003](docs/decisions/0003-checkpoint-format.md)), `train-bigram` / `generate` CLI.
+  Tiny Shakespeare: val loss 2.48 vs baseline 4.19.
+- ⏳ **Next: Sprint 2b, Neural bigram in PyTorch.** Same model as a V×V logits matrix trained
+  with gradient descent. Show that its loss converges to the counting model's (~2.45). Concepts:
+  tensors, one-hot/embedding lookup, autograd, backprop, optimizer, learning rate. Decide on
+  CPU vs CUDA torch install (machine has an RTX 4060 8 GB). Start with a concept briefing.
+
+Data: `data/tinyshakespeare.txt` (gitignored), downloaded from
+https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
 
 Known environment note: on Windows, piped output uses the legacy code page (cp1254) and garbles
 non-ASCII characters. Set `PYTHONUTF8=1`.

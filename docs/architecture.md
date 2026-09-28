@@ -1,6 +1,6 @@
 # ForgeLM architecture
 
-_Last updated: Sprint 1b_
+_Last updated: Sprint 2a_
 
 ## Principle: thin adapters around core logic
 
@@ -25,20 +25,28 @@ _Last updated: Sprint 1b_
 |---|---|
 | `forgelm/__init__.py` | Package marker and `__version__` (read from installed metadata) |
 | `forgelm/api.py` | FastAPI `app`; `GET /health`, `POST /tokenize` |
-| `forgelm/cli.py` | `forgelm` command; `--version`, `serve`, `tokenize` |
+| `forgelm/cli.py` | `forgelm` command; `--version`, `serve`, `tokenize`, `train-bigram`, `generate` |
 | `forgelm/tokenizer/base.py` | `Tokenizer` protocol: `encode`, `decode`, `tokens`, `vocab_size`, `unk_id` |
 | `forgelm/tokenizer/char.py` | `CharTokenizer` (vocab from corpus, `<unk>` = id 0) |
 | `forgelm/tokenizer/bpe.py` | `BPETokenizer`: byte-level BPE, `train(corpus, num_merges)` ([ADR 0002](decisions/0002-tokenizer-interface-and-bpe.md)) |
 | `forgelm/tokenizer/analysis.py` | `build_tokenizer(kind, corpus, merges)` and `analyze()`, shared by the CLI and API |
+| `forgelm/models/bigram.py` | `BigramModel` (counting), `softmax`, `train_on_text`, JSON checkpoints ([ADR 0003](decisions/0003-checkpoint-format.md)) |
 
 Both `tokenize` adapters follow the same path:
 `input → build_tokenizer(kind, corpus, merges) → analyze(tokenizer, text) → Analysis → print / JSON`
+
+Training and generation (CLI only for now):
+```
+train-bigram:  corpus file → train_on_text() → CharTokenizer + BigramModel → checkpoints/bigram.json
+generate:      checkpoint → load_checkpoint() → encode(prompt) → model.generate() → decode → print
+```
+The model only sees integer ids and `vocab_size`; it never sees text.
 
 ## Planned modules
 
 ```
 src/forgelm/
-├─ models/      Sprint 2-3 bigram, MiniGPT (PyTorch)
+├─ models/      Sprint 2b-3 neural bigram, MiniGPT (PyTorch)
 ├─ training/    Sprint 4   training loop, checkpoints, metrics
 ├─ inference/   Sprint 5   sampling, backends (own model, Ollama, HF)
 ├─ rag/         Sprint 7-8 chunking, embeddings, retrieval, reranking
