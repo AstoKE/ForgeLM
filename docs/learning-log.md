@@ -127,3 +127,66 @@ Takeaways:
 
 ### Open questions
 - _(fill in)_
+
+---
+
+## Sprint 2a: Counting bigram language model (2026-09-28)
+
+### Concepts
+- A language model gives **P(next token | context)**. Generating text means sampling from that
+  distribution, appending, and repeating
+- **Bigram**: the context is only the previous token
+- Training by counting: a V×V **count matrix**, and each row normalized into probabilities
+- **Add-k smoothing**: without it, an unseen pair has P = 0, and −log 0 = ∞
+- **Logits → softmax**: logits = log-probabilities, softmax = exp / sum. Subtract the max for
+  numerical stability
+- **Cross-entropy loss** = average −ln P(actual next token). **Perplexity** = exp(loss), roughly
+  "how many equally likely choices"
+- **Baseline**: a uniform model has loss ln V. Every model has to beat it
+- **Train/val split**, kept contiguous to avoid leakage. The gap between the two losses is how
+  you detect overfitting
+- **Temperature**: logits / T before softmax. T=0 is greedy (argmax)
+- **Checkpoints** hold the model *and* its tokenizer, stored as JSON because pickle can execute
+  code on load
+
+### What we built
+- `forgelm.models.BigramModel` (`train`, `probs`, `logits`, `loss`, `generate`) and `softmax()`
+- `train_on_text()` (tokenize → split → count → measure), `save_checkpoint` / `load_checkpoint`
+- `CharTokenizer.to_dict/from_dict`
+- `forgelm train-bigram` and `forgelm generate`; 36 new tests (85 total)
+
+### Experiment: Tiny Shakespeare (1.1M chars, V = 66)
+
+| | train loss | val loss | perplexity |
+|---|---|---|---|
+| uniform baseline | 4.190 | 4.190 | 66.0 |
+| bigram, smoothing 0 | 2.452 | **∞** (val contains a pair never seen in train) | ∞ |
+| bigram, smoothing 0.01 | 2.452 | 2.488 | 12.0 |
+| bigram, smoothing 1 | 2.455 | 2.482 | 12.0 |
+| bigram, smoothing 100 | 2.621 | 2.634 | 13.9 (too much smoothing flattens what was learned) |
+
+- Training takes ~0.75 s, and the checkpoint is 15 KB of readable JSON
+- Learned facts: after `q`, `u` has P = 0.90; after `:`, `\n` has 0.84
+- Train ≈ val loss: a bigram is too simple to overfit 1M characters
+- Sampling "ROMEO:" at different temperatures:
+  - **T = 0 (greedy):** only newlines. After `:` the most likely token is `\n`, and after `\n` it's
+    `\n` again, so greedy decoding gets stuck in a loop
+  - **T = 0.5:** repetitive, `the the t the`
+  - **T = 1.0:** looks like Shakespeare (names, line breaks, `'d`) but the words are nonsense
+  - **T = 2.0:** close to random. `<unk>` and `$` appear because smoothing gave them a small
+    probability and a high T amplifies it
+
+### Mistakes / surprises
+- My prediction: "the uniform loss is 65/66, and it can go down to 1/66". That mixes up
+  **probability** and **loss**. For a uniform model, P = 1/66 and loss = −ln(1/66) = ln 66 ≈ 4.19.
+  A loss of 1/66 ≈ 0.015 would mean P(correct) ≈ 0.985 on every character, which is impossible
+  when many characters can follow a newline. The actual result is 2.48, perplexity 12.
+- Writing Python code through a bash heredoc turned `"\n"` into a real newline, which broke
+  `cli.py`. ruff and pytest caught it immediately.
+- _(fill in)_
+
+### Lessons
+- _(fill in, in your own words)_
+
+### Open questions
+- _(fill in)_

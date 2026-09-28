@@ -28,6 +28,15 @@ class CharTokenizer:
         """
         return cls([UNK, *sorted(set(corpus))])
 
+    def to_dict(self) -> dict:
+        return {"type": "char", "vocab": self.itos}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CharTokenizer":
+        if data.get("type") != "char":
+            raise ValueError(f"not a char tokenizer: type={data.get('type')!r}")
+        return cls(data["vocab"])
+
     @property
     def vocab_size(self) -> int:
         return len(self.itos)

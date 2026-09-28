@@ -76,9 +76,68 @@ def test_tokenize_negative_merges_fails(capsys):
     assert "--merges must be >= 0" in capsys.readouterr().err
 
 
+@pytest.fixture
+def trained_model(tmp_path, capsys):
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("to be or not to be, that is the question.\n" * 20, encoding="utf-8")
+    model = tmp_path / "ckpt" / "bigram.json"
+
+    assert main(["train-bigram", "--corpus", str(corpus), "--out", str(model)]) == 0
+    out = capsys.readouterr().out
+    assert "uniform baseline loss" in out
+    assert f"saved {model}" in out
+    return model
+
+
+def test_generate_is_reproducible_with_seed(trained_model, capsys):
+    args = ["generate", "--model", str(trained_model), "--prompt", "to", "--seed", "7"]
+
+    main(args)
+    first = capsys.readouterr().out
+    main(args)
+    second = capsys.readouterr().out
+
+    assert first == second
+    assert first.startswith("to")
+
+
+@pytest.mark.parametrize(
+    ("extra_args", "message"),
+    [
+        (["--temperature", "-1"], "--temperature must be >= 0"),
+        (["--prompt", ""], "--prompt must not be empty"),
+    ],
+)
+def test_generate_rejects_bad_arguments(trained_model, capsys, extra_args, message):
+    with pytest.raises(SystemExit) as exc:
+        main(["generate", "--model", str(trained_model), *extra_args])
+
+    assert exc.value.code == 2
+    assert message in capsys.readouterr().err
+
+
+def test_generate_missing_model_fails(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["generate", "--model", str(tmp_path / "nope.json")])
+
+    assert exc.value.code == 2
+    assert "cannot load model" in capsys.readouterr().err
+
+
+def test_train_bigram_tiny_corpus_fails(tmp_path, capsys):
+    corpus = tmp_path / "tiny.txt"
+    corpus.write_text("ab", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        main(["train-bigram", "--corpus", str(corpus), "--out", str(tmp_path / "m.json")])
+
+    assert exc.value.code == 2
+    assert "too short" in capsys.readouterr().err
+
+
 def test_tokenize_missing_corpus_file_fails(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         main(["tokenize", "hi", "--corpus", str(tmp_path / "nope.txt")])
 
     assert exc.value.code == 2
-    assert "cannot read corpus file" in capsys.readouterr().err
+    assert "cannot read file" in capsys.readouterr().err
