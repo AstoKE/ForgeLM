@@ -190,3 +190,94 @@ Takeaways:
 
 ### Open questions
 - _(fill in)_
+
+---
+
+## Sprint 2b: Neural bigram in PyTorch (2026-09-28)
+
+### Concepts
+- **Tensor** and **device**: the same code runs on CPU or GPU (`device="cuda"`)
+- **Embedding lookup**: `W[prev]` gives exactly the same result as `one_hot(prev) @ W`, and is
+  much cheaper
+- Hand-written **cross-entropy** via `logsumexp`, which matches `F.cross_entropy`
+- **Autograd / backprop**: `loss.backward()` fills `W.grad`. For this model the gradient is
+  `(softmax − one_hot) / N`, routed back to the row `prev`; a test checks it
+- **Gradient descent**: `W -= lr * W.grad` inside `torch.no_grad()`, then reset the gradient.
+  This is the same as `torch.optim.SGD`
+- **Learning rate**: the most important hyperparameter. **Mini-batches** make each step cheap
+  but noisy (SGD)
+- Optional heavy dependency: torch is in the `ml` extra, imported lazily
+  ([ADR 0004](decisions/0004-pytorch-optional-extra.md))
+
+### What we built
+- `forgelm.models.neural_bigram`: `NeuralBigram` (W starts at zeros), `cross_entropy`,
+  `sgd_step`, `train_neural_bigram` / `train_neural_on_text`, `pick_device`
+- `encode_and_split()` extracted from `train_on_text`, so both models use the same split
+- `forgelm train-neural-bigram` prints the loss curve next to the counting model's numbers
+- 18 new tests (103 total), including autograd vs. hand-derived gradient
+
+### Experiment: Tiny Shakespeare, batch 32,768, RTX 4060
+
+Learning-rate sweep (300 steps, train loss at steps 0 → 100 → 200 → 300):
+
+| lr | loss | verdict |
+|---|---|---|
+| 0.1 | 4.190 → 4.138 → 4.088 → 4.040 | far too small: barely moves |
+| 1 | 4.190 → 3.741 → 3.454 → 3.274 | too small |
+| 10 | 4.190 → 2.843 → 2.694 → 2.630 | OK but slow |
+| **50** | 4.190 → 2.571 → 2.517 → **2.497** | good |
+| 500 | 4.190 → 5.581 → 6.070 → 5.481 | too large: loss goes *above* the uniform baseline and jumps around |
+| 5000 | 4.190 → 107 → 116 → 122 | diverged. No `nan`, because logsumexp stays stable; the loss just explodes |
+
+Long runs (3000 steps, ~15 s on GPU):
+
+| | train | val |
+|---|---|---|
+| neural, lr 50 | 2.457 | 2.487 |
+| neural, lr 100 | **2.456** | 2.485 |
+| counting, smoothing 1 (2a) | 2.455 | 2.482 |
+| counting, smoothing 0 = best possible train fit for *any* bigram | 2.4519 | ∞ |
+
+- **Gradient descent found the same answer as counting.** The neural model's loss converges to the
+  counting model's. No bigram can go below 2.4519 on the training data: counting with no
+  smoothing gives the exact optimum (the maximum-likelihood estimate).
+- **CPU vs GPU:** 300 steps took 7.0 s on CPU and 1.8 s on GPU (~3.9×), with identical losses.
+  The model is tiny (4,356 params), so the GPU barely has work to do. The gap grows with model size.
+- Rare characters train slowly: a row of W only gets gradient when that character appears in the
+  batch. That's why plain SGD needs thousands of steps for the last 0.04 of loss.
+
+### Mistakes / surprises
+- My prediction for step 0: ln 66 ≈ 4.19. **Correct**: W = 0 means uniform probabilities.
+- My prediction that the neural model could go lower than counting: only marginally. It can beat
+  smoothed counting on *train* (2.455) by at most 0.003, and it can never beat 2.4519, the
+  unsmoothed count solution.
+- Test with lr = 1e30 expected `nan` but didn't get it. On perfectly predictable data
+  (`1→2→3→4→1…`) a huge step makes the model 100% confident, which is correct, so the loss went
+  to 0. Real `nan` only appears when W overflows float32 (~3.4e38); the test now uses lr = 1e39.
+- A 5000-step run with lr = 500 took 54 minutes instead of ~30 s. I couldn't reproduce it; the same
+  runs later took normal time. Most likely the laptop slept or throttled the GPU. (Also, lr = 500
+  was a bad choice: the sweep had already shown it diverges.)
+- `import torch` prints "Failed to initialize NumPy". Torch uses NumPy only for interop, and we
+  don't need it. The warning is harmless.
+- Quiz, checked with experiments on Tiny Shakespeare:
+  - *Random init W ~ N(0, s):* step-0 loss was 4.191 (s = 0.01), 4.680 (s = 1) and 23.2 (s = 10).
+    It depends on the scale, but it never beats ln V: random confidence is confidently wrong.
+    That's why weights start small.
+  - *Removing `W.grad = None`:* I guessed "loss wouldn't change". Wrong: gradients **accumulate**,
+    so each step uses the sum of all past gradients and overshoots. After 300 steps the loss was 3.40
+    instead of 2.50, and it was rising.
+  - *Why lr = 500 goes above the uniform baseline:* each step overshoots the minimum and the
+    model becomes confidently wrong. After a space it predicted `c` instead of `t`, and 18% of
+    training pairs got P(correct) < 0.001, which costs −ln 0.001 ≈ 6.9 each. A uniform model always
+    gives P = 1/66, so it can't do worse than ln 66. A confident model can.
+  - *Weight decay ≈ ?* I guessed "gradient descent". Wrong: it corresponds to **smoothing**. It pulls
+    W toward 0, which means toward uniform probabilities. With wd = 1, W max dropped from 10.5 to 5.0
+    and train loss rose from 2.456 to 2.771, like counting with smoothing 100. It's a term added
+    to the loss that gradient descent then minimizes, not gradient descent itself.
+- _(fill in)_
+
+### Lessons
+- _(fill in, in your own words)_
+
+### Open questions
+- _(fill in)_

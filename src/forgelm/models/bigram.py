@@ -128,8 +128,10 @@ class TrainReport:
     val_loss: float
 
 
-def train_on_text(text: str, smoothing: float = 1.0, val_fraction: float = 0.1) -> TrainReport:
-    """Build a char tokenizer, split train/val, count bigrams, and measure loss."""
+def encode_and_split(
+    text: str, val_fraction: float = 0.1
+) -> tuple[CharTokenizer, list[int], list[int]]:
+    """Char-tokenize `text` and split the ids into contiguous train/val parts."""
     if not 0 < val_fraction < 1:
         raise ValueError("val_fraction must be between 0 and 1")
 
@@ -144,7 +146,12 @@ def train_on_text(text: str, smoothing: float = 1.0, val_fraction: float = 0.1) 
     train_ids, val_ids = ids[:split], ids[split:]
     if len(train_ids) < 2 or len(val_ids) < 2:
         raise ValueError("corpus too short for a train/val split")
+    return tokenizer, train_ids, val_ids
 
+
+def train_on_text(text: str, smoothing: float = 1.0, val_fraction: float = 0.1) -> TrainReport:
+    """Build a char tokenizer, split train/val, count bigrams, and measure loss."""
+    tokenizer, train_ids, val_ids = encode_and_split(text, val_fraction)
     model = BigramModel.train(train_ids, tokenizer.vocab_size, smoothing)
     return TrainReport(
         model=model,

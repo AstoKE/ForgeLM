@@ -19,10 +19,17 @@ understand, debug and extend everything in this repo.
 - ✅ **Sprint 2a: Counting bigram.** `forgelm.models.BigramModel`, `softmax`, JSON checkpoints
   ([ADR 0003](docs/decisions/0003-checkpoint-format.md)), `train-bigram` / `generate` CLI.
   Tiny Shakespeare: val loss 2.48 vs baseline 4.19.
-- ⏳ **Next: Sprint 2b, Neural bigram in PyTorch.** Same model as a V×V logits matrix trained
-  with gradient descent. Show that its loss converges to the counting model's (~2.45). Concepts:
-  tensors, one-hot/embedding lookup, autograd, backprop, optimizer, learning rate. Decide on
-  CPU vs CUDA torch install (machine has an RTX 4060 8 GB). Start with a concept briefing.
+- ✅ **Sprint 2b: Neural bigram in PyTorch.** `forgelm.models.neural_bigram` (hand-written
+  cross-entropy + SGD), `train-neural-bigram` CLI, torch as `ml` extra
+  ([ADR 0004](docs/decisions/0004-pytorch-optional-extra.md)). Converges to the counting model
+  (train 2.456 vs 2.455) in 3000 steps / 15 s on GPU.
+- ⏳ **Next: Sprint 3, Transformer / MiniGPT from scratch.** Context longer than one token:
+  self-attention (single head → multi-head), Q/K/V, causal mask, MLP, residual, LayerNorm,
+  position embeddings. Needs torch checkpoints (new ADR, `weights_only=True`) and probably
+  Adam. Start with a concept briefing.
+
+Environment: torch 2.14.0+cu130 in `.venv` (CUDA 13.0 driver, RTX 4060 8 GB). Install with
+`pip install torch --index-url https://download.pytorch.org/whl/cu130` then `pip install -e ".[dev,ml]"`.
 
 Data: `data/tinyshakespeare.txt` (gitignored), downloaded from
 https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt

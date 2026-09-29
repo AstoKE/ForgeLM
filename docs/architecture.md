@@ -1,6 +1,6 @@
 # ForgeLM architecture
 
-_Last updated: Sprint 2a_
+_Last updated: Sprint 2b_
 
 ## Principle: thin adapters around core logic
 
@@ -30,7 +30,8 @@ _Last updated: Sprint 2a_
 | `forgelm/tokenizer/char.py` | `CharTokenizer` (vocab from corpus, `<unk>` = id 0) |
 | `forgelm/tokenizer/bpe.py` | `BPETokenizer`: byte-level BPE, `train(corpus, num_merges)` ([ADR 0002](decisions/0002-tokenizer-interface-and-bpe.md)) |
 | `forgelm/tokenizer/analysis.py` | `build_tokenizer(kind, corpus, merges)` and `analyze()`, shared by the CLI and API |
-| `forgelm/models/bigram.py` | `BigramModel` (counting), `softmax`, `train_on_text`, JSON checkpoints ([ADR 0003](decisions/0003-checkpoint-format.md)) |
+| `forgelm/models/bigram.py` | `BigramModel` (counting), `softmax`, `encode_and_split`, `train_on_text`, JSON checkpoints ([ADR 0003](decisions/0003-checkpoint-format.md)) |
+| `forgelm/models/neural_bigram.py` | PyTorch bigram: `NeuralBigram` (V×V `W`), hand-written `cross_entropy` and `sgd_step`, `train_neural_bigram`. Needs the `ml` extra; imported explicitly, never re-exported ([ADR 0004](decisions/0004-pytorch-optional-extra.md)) |
 
 Both `tokenize` adapters follow the same path:
 `input → build_tokenizer(kind, corpus, merges) → analyze(tokenizer, text) → Analysis → print / JSON`
@@ -39,8 +40,13 @@ Training and generation (CLI only for now):
 ```
 train-bigram:  corpus file → train_on_text() → CharTokenizer + BigramModel → checkpoints/bigram.json
 generate:      checkpoint → load_checkpoint() → encode(prompt) → model.generate() → decode → print
+train-neural-bigram: corpus → encode_and_split() → train_neural_bigram() (SGD on CPU/GPU) → loss history
+                     (also runs train_on_text() for comparison; no checkpoint saved yet)
 ```
 The model only sees integer ids and `vocab_size`; it never sees text.
+
+Torch boundary: nothing under `forgelm/` imports torch at module load except
+`models/neural_bigram.py`, and only the CLI command that needs it imports that module.
 
 ## Planned modules
 
