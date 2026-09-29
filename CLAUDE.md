@@ -23,10 +23,12 @@ understand, debug and extend everything in this repo.
   cross-entropy + SGD), `train-neural-bigram` CLI, torch as `ml` extra
   ([ADR 0004](docs/decisions/0004-pytorch-optional-extra.md)). Converges to the counting model
   (train 2.456 vs 2.455) in 3000 steps / 15 s on GPU.
-- ⏳ **Next: Sprint 3, Transformer / MiniGPT from scratch.** Context longer than one token:
-  self-attention (single head → multi-head), Q/K/V, causal mask, MLP, residual, LayerNorm,
-  position embeddings. Needs torch checkpoints (new ADR, `weights_only=True`) and probably
-  Adam. Start with a concept briefing.
+- ✅ **Sprint 3a: Causal averaging.** `forgelm.models.attention`: `causal_mask`, the causal
+  average written 3 ways (loop, matmul, mask + softmax), `masked_softmax_weights`.
+- ⏳ **Next: Sprint 3b, single-head self-attention.** Learned scores instead of equal weights:
+  Q/K/V, scores = Q·Kᵀ / √d, reuse `masked_softmax_weights`. Then 3c (block: multi-head, MLP,
+  residual, LayerNorm, position embeddings) and 3d (train MiniGPT on GPU, torch checkpoints
+  with a new ADR, probably Adam). Start with a concept briefing, in simple language.
 
 Environment: torch 2.14.0+cu130 in `.venv` (CUDA 13.0 driver, RTX 4060 8 GB). Install with
 `pip install torch --index-url https://download.pytorch.org/whl/cu130` then `pip install -e ".[dev,ml]"`.
@@ -50,6 +52,10 @@ Update this section at the end of every sprint.
 Explain things, write summaries and ask quiz questions in **Turkish**, keeping important
 technical terms in English (token, vocabulary, merge, embedding...). Code, comments, commit
 messages and repo docs stay in English.
+
+Keep explanations **simple**: start with an everyday analogy, then a tiny concrete example with
+real numbers, and only then the term or the code. At most 3-5 new ideas per message, short
+sentences, and split sprints into small sub-steps.
 
 ## Session loop
 

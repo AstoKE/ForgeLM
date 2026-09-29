@@ -281,3 +281,46 @@ Long runs (3000 steps, ~15 s on GPU):
 
 ### Open questions
 - _(fill in)_
+
+---
+
+## Sprint 3a: Causal averaging, the skeleton of attention (2026-09-29)
+
+### Concepts
+- The bigram's problem: it only sees the last token. "...t" could be followed by h, o or a space,
+  while "I want t" is almost surely followed by "o"
+- **Embedding**: each token is a list of numbers (its "profile"), like the rows of W in 2b
+- Simplest way to use the past: position t takes the **average** of positions 0..t
+- **Causal mask**: a lower-triangular table of who may look at whom. No looking at the future,
+  because the future is exactly what we're trying to predict
+- The same average three ways: a loop, one matrix multiply with a weight triangle
+  (`[1,0,0] [1/2,1/2,0] [1/3,1/3,1/3]`), and **mask + softmax** (future = −inf → weight 0),
+  which is the shape attention uses
+
+### What we built
+- `forgelm.models.attention`: `causal_mask`, `causal_average_loop/matmul/softmax`,
+  `uniform_causal_weights`, `masked_softmax_weights`
+- 16 new tests (119 total). Key test: changing a future token doesn't change earlier outputs
+
+### Mistakes / surprises
+- My prediction for `[10, 0, 5]`: "the average is 5". That's only position 2, `(10+0+5)/3 = 5`.
+  Each position has its own average: **`[10, 5, 5]`**.
+- My prediction: "changing 5 to 100 changes position 0". **No**: position 0 only sees itself, so
+  it stays 10. Position 1 stays 5 and only position 2 changes (to 36.67). That's the causal mask:
+  information flows only from the past to the future.
+- Quiz:
+  - `[4, 8]` → I answered "6". Again only the last position; the output has **one value per
+    position**: `[4, 6]`. This is my recurring mistake: I think of *one* average for the whole
+    sequence, but every position gets its own.
+  - Why is the last cell of row 2 zero? "0 means don't look". Right, and the reason is that
+    position 3 is in the **future** for position 2.
+  - Huge score (1e9) on a future cell? I answered "the average goes up a lot". **No**: the mask
+    *overwrites* that score with −inf *before* softmax, so its weight is exactly 0. Output stayed
+    `[10, 5, 36.67]`. The mask doesn't compete with the score, it replaces it.
+- _(fill in)_
+
+### Lessons
+- _(fill in, in your own words)_
+
+### Open questions
+- _(fill in)_
