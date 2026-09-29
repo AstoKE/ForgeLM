@@ -20,6 +20,11 @@ dev = [
     "httpx2",  # required by FastAPI's TestClient (starlette deprecated plain httpx)
     "ruff>=0.6",
 ]
+# Neural models. Optional because torch is large (~2.5 GB with CUDA).
+# For a CUDA build on Windows, install torch from PyTorch's index first (see README).
+ml = [
+    "torch>=2.6",
+]
 
 [project.scripts]
 # Creates a `forgelm` command that calls forgelm.cli.main()

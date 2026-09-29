@@ -40,6 +40,18 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--smoothing", type=float, default=1.0, help="Add-k smoothing constant.")
     train.add_argument("--val-fraction", type=float, default=0.1)
 
+    neural = subcommands.add_parser(
+        "train-neural-bigram", help="Train a bigram with gradient descent (needs torch)."
+    )
+    neural.add_argument("--corpus", required=True, help="UTF-8 training text.")
+    neural.add_argument("--steps", type=int, default=300)
+    neural.add_argument("--lr", type=float, default=50.0, help="Learning rate.")
+    neural.add_argument("--batch-size", type=int, default=32_768)
+    neural.add_argument("--eval-every", type=int, default=50)
+    neural.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
+    neural.add_argument("--seed", type=int, default=0)
+    neural.add_argument("--val-fraction", type=float, default=0.1)
+
     generate = subcommands.add_parser("generate", help="Generate text from a trained model.")
     generate.add_argument("--model", default="checkpoints/bigram.json")
     generate.add_argument("--prompt", default="\n", help="Text to continue (default: newline).")
@@ -114,6 +126,42 @@ def main(argv: list[str] | None = None) -> int:
         save_checkpoint(args.out, report.model, report.tokenizer)
         print(format_train_report(report))
         print(f"saved {args.out}")
+        return 0
+
+    if args.command == "train-neural-bigram":
+        try:
+            # Lazy import: torch is an optional extra and takes seconds to load.
+            from forgelm.models.neural_bigram import device_name, train_neural_on_text
+        except ImportError:
+            parser.error('PyTorch is not installed; see README ("pip install -e .[ml]")')
+        text = read_text_file(parser, args.corpus)
+        try:
+            model, history = train_neural_on_text(
+                text,
+                val_fraction=args.val_fraction,
+                steps=args.steps,
+                lr=args.lr,
+                batch_size=args.batch_size,
+                eval_every=args.eval_every,
+                device=args.device,
+                seed=args.seed,
+            )
+            counting = train_on_text(text, smoothing=1.0, val_fraction=args.val_fraction)
+        except (ValueError, FloatingPointError) as exc:
+            parser.error(str(exc))
+        print(
+            f"device {device_name(history.device)} | vocab {model.vocab_size}"
+            f" | params {model.W.numel():,}"
+        )
+        for step, train_loss, val_loss in zip(
+            history.steps, history.train_loss, history.val_loss, strict=True
+        ):
+            print(f"step {step:>5} | train {train_loss:.3f} | val {val_loss:.3f}")
+        print(f"trained in {history.seconds:.1f}s")
+        print(
+            f"counting bigram (2a): train {counting.train_loss:.3f}"
+            f" | val {counting.val_loss:.3f} | baseline {counting.baseline_loss:.3f}"
+        )
         return 0
 
     if args.command == "generate":

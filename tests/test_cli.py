@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from forgelm import __version__
@@ -133,6 +135,33 @@ def test_train_bigram_tiny_corpus_fails(tmp_path, capsys):
 
     assert exc.value.code == 2
     assert "too short" in capsys.readouterr().err
+
+
+def test_train_neural_bigram_prints_progress(tmp_path, capsys):
+    pytest.importorskip("torch")
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("to be or not to be, that is the question.\n" * 20, encoding="utf-8")
+
+    args = ["train-neural-bigram", "--corpus", str(corpus), "--steps", "10", "--device", "cpu"]
+    assert main([*args, "--batch-size", "64", "--eval-every", "5"]) == 0
+
+    out = capsys.readouterr().out
+    assert "device cpu" in out
+    assert "step     0" in out
+    assert "step    10" in out
+    assert "counting bigram (2a)" in out
+
+
+def test_train_neural_bigram_without_torch_fails_clearly(tmp_path, capsys, monkeypatch):
+    # Pretend torch isn't installed: a None entry in sys.modules makes `import` fail.
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.delitem(sys.modules, "forgelm.models.neural_bigram", raising=False)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["train-neural-bigram", "--corpus", str(tmp_path / "x.txt")])
+
+    assert exc.value.code == 2
+    assert "PyTorch is not installed" in capsys.readouterr().err
 
 
 def test_tokenize_missing_corpus_file_fails(tmp_path, capsys):

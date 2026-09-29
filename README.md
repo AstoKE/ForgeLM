@@ -13,8 +13,8 @@ Each sprint adds one concept to the same product. What I learned in each one is 
 |---|---|---|
 | 0 | Engineering setup: package, CLI, API, tests, lint | ✅ |
 | 1 | Tokenizer playground: char tokenizer → byte-level BPE | ✅ |
-| 2 | Tiny language model: counting bigram ✅ → neural bigram (PyTorch) | ⏳ |
-| 3 | Transformer / MiniGPT from scratch | |
+| 2 | Tiny language model: counting bigram → neural bigram (PyTorch) | ✅ |
+| 3 | Transformer / MiniGPT from scratch | ⏳ |
 | 4 | Training and inference dashboard | |
 | 5 | Open-source LLM integration (Ollama / llama.cpp / HF) | |
 | 6 | LoRA / QLoRA fine-tuning | |
@@ -33,6 +33,18 @@ python -m pip install -e ".[dev]"
 ```
 
 On macOS/Linux, activate with `source .venv/bin/activate` instead.
+
+### Optional: PyTorch for neural models
+
+```powershell
+# Windows + NVIDIA GPU: PyPI only has CPU wheels, so get the CUDA build from PyTorch's index.
+# Pick the cuXXX that your driver supports (`nvidia-smi` shows "CUDA Version").
+python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
+python -m pip install -e ".[dev,ml]"
+```
+
+On Linux, `pip install -e ".[dev,ml]"` is enough (the PyPI wheel includes CUDA). Without torch,
+everything except the neural commands still works, and their tests are skipped.
 
 ## Usage
 
@@ -53,6 +65,9 @@ curl -o data/tinyshakespeare.txt https://raw.githubusercontent.com/karpathy/char
 
 forgelm train-bigram --corpus data/tinyshakespeare.txt          # -> checkpoints/bigram.json
 forgelm generate --prompt "ROMEO:" --max-tokens 200 --seed 42 --temperature 0.8
+
+# Same model, learned with gradient descent instead of counting (needs the ml extra)
+forgelm train-neural-bigram --corpus data/tinyshakespeare.txt --steps 3000 --lr 100
 ```
 
 ## Development
