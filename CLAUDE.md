@@ -26,12 +26,23 @@ understand, debug and extend everything in this repo.
 - ✅ **Sprint 3a: Causal averaging.** `forgelm.models.attention`: `causal_mask`, the causal
   average written 3 ways (loop, matmul, mask + softmax), `masked_softmax_weights`.
 - ✅ **Sprint 3b: Single-head self-attention.** `attend(q, k, v)` and `SelfAttentionHead`
-  (hand-written `Wq/Wk/Wv`, scores = Q·Kᵀ / √d, reuses `masked_softmax_weights`). Untrained, so
-  the weights are random. Zero Q/K reproduces the 3a average. The 3b quiz is still unanswered
-  (see `docs/learning-log.md`).
-- ⏳ **Next: Sprint 3c**, the full block: multi-head, MLP, residual, LayerNorm, position
-  embeddings. Then 3d (train MiniGPT on GPU, torch checkpoints with a new ADR, probably Adam).
-  Start with a concept briefing, in simple language.
+  (hand-written `Wq/Wk/Wv`, scores = Q·Kᵀ / √d, reuses `masked_softmax_weights`). Zero Q/K
+  reproduces the 3a average. Quiz answered.
+- ✅ **Sprint 3c: MiniGPT, the full model, untrained.** Built in three steps:
+  3c-1 `MultiHeadAttention` (heads over a split of the channels, concat, `Wo`) and
+  `block.FeedForward` (`C → 4C → relu → C`);
+  3c-2 `block.LayerNorm` and `block.TransformerBlock` (pre-norm + residuals, `(T, C) → (T, C)`
+  so blocks stack);
+  3c-3 `models/minigpt.MiniGPT` (token + position embedding, block stack, `ln_final`, `(C, V)`
+  head, `forward` / `loss` / `generate`).
+  172 tests. Proof it works end to end: plain SGD memorises `"to be or not to be"` (loss
+  4.35 → 0.0009 in 300 steps) and greedy decoding reproduces it exactly, which a bigram cannot
+  do. The 3c-2 quiz is still unanswered (see `docs/learning-log.md`).
+- ⏳ **Next: Sprint 3d**, train MiniGPT on Tiny Shakespeare on the GPU: batching over random
+  windows, a train/val loop, probably Adam instead of hand-written SGD, torch checkpoints with a
+  new ADR, and `train-minigpt` / `generate` CLI commands. Start with a concept briefing, in
+  simple language. Expect Shakespeare-shaped nonsense, not a chatbot -- a real assistant arrives
+  in Sprint 5 with an open-source model.
 - 💡 **Backlog: a web UI** served by FastAPI at `/ui` (tokenizer, generate and attention
   heatmap panels; needs `POST /generate` and `POST /attention`). Agreed to do it later.
 

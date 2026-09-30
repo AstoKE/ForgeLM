@@ -509,3 +509,60 @@ Parameter split of one block (embed_dim 64, 8 heads): 49,728 total, of which att
 
 ### Open questions
 - _(fill in)_
+
+---
+
+## Sprint 3c-3: MiniGPT, the whole model (2026-09-30)
+
+### Concepts
+- Attention scores `q . k` are built from **content only**, so "the dog bit the man" and "the
+  man bit the dog" would look identical. The causal mask carries a little order information
+  ("5 tokens came before me") but not which token sat where
+- **Position embedding**: a second table, one row per seat. `x = token_embedding[ids] +
+  position_embedding[:T]`. One table answers "what is this token?", the other "where am I?".
+  Both are learned; the model discovers by itself that seat 2 differs from seat 5
+- The height of that table is the model's hard limit. No seat `block_size + 1` exists -- that
+  is exactly what a **context window** is, and why `generate` crops to the last `block_size`
+  tokens
+- The end of the stack: a final LayerNorm, then one `(C, V)` matrix -> **logits**, the same
+  output the bigram produced, except this model looked at the whole past instead of one token
+- An embedding lookup is `table[ids]`, the same trick as `NeuralBigram`'s `W[prev]`: equal to
+  `one_hot(ids) @ table` but much cheaper
+
+### What we built
+- `models/minigpt.py`: `MiniGPT(vocab_size, embed_dim, num_heads, num_blocks, block_size)` with
+  `forward` (returns logits plus the attention weights of every block), `loss` (reuses 2b's
+  hand-written `cross_entropy`), `generate` (temperature, greedy at 0, context cropping) and
+  `num_parameters`
+- 17 new tests (172 total). Key ones: changing the last token leaves every earlier row of logits
+  untouched; the same token in two seats gives different logits, and zeroing the position table
+  makes them equal again (so the difference really is the position embedding); a token the batch
+  never saw gets exactly zero gradient; and the end-to-end test below
+
+### Experiment: memorising one sentence
+`"to be or not to be"`, 7-char vocab, embed_dim 32, 2 blocks, 26,688 parameters, plain SGD
+(lr 0.1, no optimizer), 300 steps in 0.7 s on CPU:
+```
+step   0 | loss 4.3457      (ln 7 = 1.946)
+step  50 | loss 0.0084
+step 300 | loss 0.0009
+greedy: 'to be or not to be'
+```
+A bigram **cannot** do this: 'o' is followed by ' ', 'r' and 't', and 't' by both 'o' and ' ',
+so one token of context cannot choose. MiniGPT reads the whole past, so it reproduces the
+sentence exactly. This is the first time the model is provably using context.
+
+Sizes: `vocab 66, embed_dim 64, 4 heads, 4 blocks, block_size 128` -> 215,680 parameters in 89
+tensors.
+
+### Mistakes / surprises
+- The untrained loss is 4.60 while `ln(66) = 4.19`, i.e. slightly **worse** than guessing. Random
+  weights do not give uniform logits: the head is `randn * C^-0.5`, so the logits start with a
+  spread of about 1 and confidently prefer the wrong tokens. Training fixes it in a few steps.
+  A smaller head init would start closer to `ln(V)`
+
+### Lessons
+- _(fill in, in your own words)_
+
+### Open questions
+- _(fill in)_
