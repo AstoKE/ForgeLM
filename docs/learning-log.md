@@ -456,3 +456,56 @@ output `[7.876, 2.124]`. The 3a average gave `[5, 5]`. (The briefing rounded thi
 
 ### Open questions
 - _(fill in)_
+
+---
+
+## Sprint 3c-2: The transformer block, residuals and LayerNorm (2026-09-30)
+
+### Concepts
+- **Residual** `x = x + block(x)`: a motorway with a service road next to it. Information flows
+  along the main road untouched; the block only proposes a correction to add
+- The real reason is the gradient: in the backward pass an **addition copies the gradient to
+  both branches unchanged**, so there is a path from the deepest block to the input that never
+  passes through a matmul. Without it the gradient is multiplied at every layer and decays
+- A residual also means a block that learned nothing useful just adds ~0 and gets out of the way
+- **LayerNorm**: residuals keep adding, so the numbers grow as blocks stack. Big numbers break
+  softmax (winner-takes-all, see the 3b quiz) and saturate `relu`. LayerNorm pulls each position
+  back to mean 0 / std 1, then applies a learned `gamma` (scale) and `beta` (shift)
+- `gamma = 1`, `beta = 0` at the start, so the layer begins as the plain normalisation and the
+  model can undo part of it if that helps. Position-wise, like the FFN: a row uses its own
+  numbers only, never a batch's and never its neighbours'
+- **Pre-norm vs post-norm**: the 2017 paper wrote `x = LN(x + block(x))`, GPT-2 and everything
+  after it write `x = x + block(LN(x))`. In pre-norm the main road never passes through a
+  LayerNorm, so the gradient path stays clean and deep stacks train without warmup. We use
+  pre-norm
+
+### What we built
+- `block.LayerNorm`: hand-written `gamma`/`beta`, `var(unbiased=False)` (divide by C, like
+  `nn.LayerNorm`), `eps = 1e-5` against a constant row
+- `block.TransformerBlock`: `ln1 -> MultiHeadAttention -> residual -> ln2 -> FeedForward ->
+  residual`. `forward` returns `(T, C)` plus the attention weights. The FFN gets
+  `seed + num_heads + 1` so it cannot start as a copy of head 0
+- 13 new tests (155 total). Key ones: the hand-written LayerNorm matches
+  `F.layer_norm`; a 100x bigger input comes out the same; a constant row gives no NaN; and the
+  **residual proof** -- zero `Wo` and `W2` makes the whole block the exact identity
+
+### Experiment: 6 blocks stacked, embed_dim 32
+`max|x|` layer by layer:
+```
+LayerNorm on : 10.2 ->  9.6 ->  9.9 ->  9.8 -> 10.4 -> 10.6 -> 10.8
+LayerNorm off: 10.2 -> 15.6 -> 27.1 -> 44.9 -> 60.1 -> 108.1 -> 138.1
+```
+And the 20-layer gradient test: the gradient reaching the input is 0.062 without residuals
+against 4.406 with them, about 70x.
+
+Parameter split of one block (embed_dim 64, 8 heads): 49,728 total, of which attention 16,384
+(= 4C^2) and feed-forward 33,088 (~8C^2). Two thirds of a transformer is the MLP.
+
+### Mistakes / surprises
+- _(fill in)_
+
+### Lessons
+- _(fill in, in your own words)_
+
+### Open questions
+- _(fill in)_

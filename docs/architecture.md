@@ -1,6 +1,6 @@
 # ForgeLM architecture
 
-_Last updated: Sprint 3c-1_
+_Last updated: Sprint 3c-2_
 
 ## Principle: thin adapters around core logic
 
@@ -33,7 +33,7 @@ _Last updated: Sprint 3c-1_
 | `forgelm/models/bigram.py` | `BigramModel` (counting), `softmax`, `encode_and_split`, `train_on_text`, JSON checkpoints ([ADR 0003](decisions/0003-checkpoint-format.md)) |
 | `forgelm/models/neural_bigram.py` | PyTorch bigram: `NeuralBigram` (V×V `W`), hand-written `cross_entropy` and `sgd_step`, `train_neural_bigram`. Needs the `ml` extra; imported explicitly, never re-exported ([ADR 0004](decisions/0004-pytorch-optional-extra.md)) |
 | `forgelm/models/attention.py` | Causal mixing of past positions: `causal_mask`, causal average (loop / matmul / masked softmax), `masked_softmax_weights` (3a). `attend(q, k, v)` and `SelfAttentionHead` with learned `Wq/Wk/Wv` (3b). `MultiHeadAttention`: heads in parallel, concatenated, projected by `Wo`, returns the per-head weights (3c). Needs torch |
-| `forgelm/models/block.py` | `FeedForward`: per-position MLP `C -> 4C -> relu -> C`, hand-written `W1/b1/W2/b2`. Attention moves information between positions, this processes it inside one position (3c). Needs torch |
+| `forgelm/models/block.py` | The transformer block. `FeedForward`: per-position MLP `C -> 4C -> relu -> C`, hand-written `W1/b1/W2/b2` (3c-1). `LayerNorm`: per-position mean 0 / std 1 plus learned `gamma`/`beta`. `TransformerBlock`: pre-norm plus residuals, `x = x + attention(ln1(x))` then `x = x + feedforward(ln2(x))`, `(T, C) -> (T, C)` so blocks stack (3c-2). Needs torch |
 
 Both `tokenize` adapters follow the same path:
 `input → build_tokenizer(kind, corpus, merges) → analyze(tokenizer, text) → Analysis → print / JSON`
