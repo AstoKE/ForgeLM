@@ -353,15 +353,103 @@ output `[7.876, 2.124]`. The 3a average gave `[5, 5]`. (The briefing rounded thi
 `[7.875, 2.125]`; the exact result is 7.876 / 2.124.)
 
 ### Mistakes / surprises
-- _(fill in after the quiz)_
+- Quiz 1, scores `[2, 0, 1]` -> `[2, 5, 1]`: I said "the weights change proportionally to the
+  0 -> 5 increase". Two things wrong. (a) It is not proportional but **exponential**:
+  `exp(5) = 148`, so token 1 becomes 148x heavier before normalising. (b) The real surprise is
+  **token 0**: its score never changed, yet its weight fell from 0.665 to 0.047. Every row of
+  softmax is one pie that always sums to 1, so it is a **competition**, not an independent
+  measurement. If one position takes more, the others must lose.
+- Quiz 4, `Wq = Wk = 0`: I said "attention stays constant". Half right. The **weights** become
+  constant, and exactly 3a's triangle (`[1,0,0] / [1/2,1/2,0] / [1/3,1/3,1/3]`), so attention
+  collapses into the plain causal average. But the **output** is not constant, because
+  `v = x @ Wv` still depends on `x`. Attention loses its "who looks at whom" decision, not the
+  information it carries.
 
-### Quiz (unanswered, to do next session)
+### Quiz (answered 2026-09-30)
 1. Scores `[2, 0, 1]`: if token 1's score goes from 0 to 5, what happens to the weights of
-   token 1 and token 0?
-2. If I change the last row of `x`, which output rows change?
-3. `head_size = 64` and no `/ sqrt`: do the scores get bigger or smaller, and what does
-   softmax do?
-4. If `Wq` and `Wk` are zero, what does attention become?
+   token 1 and token 0? -> **Wrong**, see above. `[0.665, 0.090, 0.245]` -> `[0.047, 0.936, 0.017]`.
+2. If I change the last row of `x`, which output rows change? -> **Correct**: only the last row.
+   The last row of `x` changes `q_T`, `k_T` and `v_T`, but position `t < T` only looks at
+   `s <= t`, so it never sees it. That is the causal mask.
+3. `head_size = 64` and no `/ sqrt`: do the scores get bigger or smaller, and what does softmax
+   do? -> **Did not know.** They get **bigger**: a score is the sum of `head_size` products, so
+   it grows with about `sqrt(64) = 8`. Measured on random q/k, `T=8`, `H=64`:
+   raw scores std 7.43 (min -22.69, max 13.97) vs scaled std 0.93 (min -2.84, max 1.75).
+   The largest weight in a row is 0.999 raw vs 0.429 scaled. So without scaling softmax becomes
+   winner-takes-all at initialisation: the model commits 99.9% to a **random** token, softmax
+   behaves like argmax, gradients go to ~0 and training stalls. `/ sqrt(head_size)` pulls the
+   spread back to ~1 and keeps softmax soft enough to be corrected.
+4. If `Wq` and `Wk` are zero, what does attention become? -> **Half right**, see above: the 3a
+   causal average (`test_zero_qk_matches_3a_average` covers this).
+
+### Lessons
+- _(fill in, in your own words)_
+
+### Open questions
+- _(fill in)_
+
+---
+
+## Sprint 3c-1: Multi-head attention and the feed-forward network (2026-09-30)
+
+### Concepts
+- One head learns **one** kind of relation. Several heads run side by side, each looking for
+  something else; their outputs are concatenated and mixed once by `Wo`
+- The channels are **split**, not duplicated: `head_size = embed_dim // num_heads`, so the
+  concatenation is `embed_dim` wide again and the block keeps `(T, C) -> (T, C)`. That is what
+  makes the residual `x = x + attention(x)` possible in 3c-2
+- Every head needs its **own seed**. Identical heads would stay identical forever, which is just
+  one head computed `num_heads` times
+- Attention only *moves* information (`weights @ v` is a weighted sum). The **FeedForward**
+  *processes* it: `relu(x @ W1 + b1) @ W2 + b2`, widening `C -> 4C` and back
+- FFN is **position-wise**: each row goes through the same small network alone. Attention mixes
+  positions, the FFN never does
+- **Why the nonlinearity matters**: without `relu`, `(x @ W1) @ W2 = x @ (W1 @ W2)` is a single
+  matrix, so widening to 4C buys nothing at all. Measured: `W1 @ W2 = [[0, 6], [3, 4]]`, and
+  `x = [1, -2]` gives `[-6, -2]` instead of the network's `[1, 1]`
+- Most of a transformer's parameters live in the FFN (~8C^2) rather than in attention (~4C^2)
+
+### What we built
+- `attention.MultiHeadAttention`: a list of `SelfAttentionHead`s (seed + i), `torch.cat` of their
+  outputs, `@ Wo`. `forward` returns `(T, C)` and the weights stacked per head `(num_heads, T, T)`
+  -- those are what an attention heatmap will draw later
+- `models/block.py` (new): `FeedForward`, hand-written `W1/b1/W2/b2`, `hidden_dim = 4 * embed_dim`
+  by default. Biases start at zero; the weights already break the symmetry
+- 14 new tests (142 total). Key ones: `num_heads=1` with `Wo = I` reproduces a single 3b head
+  exactly; different heads produce different weights; causality survives `Wo` (it mixes channels,
+  never positions); changing one row of the FFN input leaves every other row untouched; equal
+  rows give equal outputs
+
+### Experiment: feed-forward by hand, C=2, hidden=4
+`x = [1, -2]` -> `x @ W1 = [1, -2, 0, -3]` -> `relu` -> `[1, 0, 0, 0]` (only unit 0 fired)
+-> `@ W2` -> `[1, 1]`. Without the relu the same input gives `[-6, -2]`.
+
+### Mistakes / surprises
+- `pytest.approx` does not accept nested lists: `approx([[1.0, 1.0]])` raises `TypeError`.
+  Compare one row at a time, `out[0].tolist() == pytest.approx([1.0, 1.0])`
+- Quiz 3: I guessed "the tests about negatives would fail". True, but I missed the point of the
+  question. Deleting the `relu` really does fail exactly 2 of the 8 tests, and
+  `test_every_position_is_processed_on_its_own` **keeps passing**. Position independence does not
+  come from the `relu`, it comes from the shape of the matmul. The two properties are separate:
+  `@ W` gives position independence, `relu` gives the capacity to compute something. Without the
+  `relu` the FFN is still position-wise, only meaningless.
+- Quiz 4: I did not know why `Wo` cannot leak the future. The rule is **which side the matrix
+  multiplies from**: `weights @ v` has the matrix on the **left**, so it mixes rows (positions)
+  and needs the mask. `concat @ Wo` has it on the **right**, so it mixes columns (channels) only.
+  Every output row of `concat @ Wo` is computed from its own input row alone, so leaking is not
+  possible. A `(T, T)` matrix multiplied from the left would leak -- and that is exactly what
+  attention does, which is why attention is the part that needs a mask.
+
+### Quiz (answered 2026-09-30)
+1. `embed_dim = 64, num_heads = 8` -> how many channels per head, and what changes at 16?
+   -> **Correct**: 8 channels, then 4. And the trade-off: more heads look for more different
+   relations, but each head looks through a narrower window (`q . k` over 4 numbers is a coarse
+   match). The total compute stays the same; what changes is width vs depth of matching. Real
+   models keep `head_size` near 64 (GPT-2: 768 channels, 12 heads, head_size 64).
+2. Same seed for every head -> **Correct**: they would stay identical forever, because equal
+   weights and equal input give equal gradients. You pay for `num_heads` heads and get one.
+3. Delete the `relu` -> which tests fail? -> **Half right**, see above.
+4. Can `Wo` leak the future? -> **Did not know**, see above.
 
 ### Lessons
 - _(fill in, in your own words)_

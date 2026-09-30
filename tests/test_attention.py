@@ -3,6 +3,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from forgelm.models.attention import (  # noqa: E402
+    MultiHeadAttention,
     SelfAttentionHead,
     attend,
     causal_average_loop,
@@ -187,3 +188,75 @@ def test_head_rejects_invalid_sizes():
         SelfAttentionHead(embed_dim=0, head_size=4)
     with pytest.raises(ValueError, match=">= 1"):
         SelfAttentionHead(embed_dim=8, head_size=0)
+
+
+# --- Sprint 3c: multi-head -------------------------------------------------------------
+
+
+def test_multi_head_keeps_the_embedding_width():
+    mha = MultiHeadAttention(embed_dim=8, num_heads=4)
+
+    out, weights = mha.forward(torch.randn(5, 8))
+
+    assert mha.head_size == 2  # 8 channels split over 4 heads
+    assert out.shape == (5, 8)  # concat(4 x 2) = 8, then Wo keeps it at 8
+    assert weights.shape == (4, 5, 5)  # one (T, T) table per head
+
+
+def test_one_head_with_identity_wo_is_exactly_a_single_head():
+    # num_heads=1 means head_size == embed_dim, so 3c generalises 3b.
+    x = torch.randn(6, 4, generator=torch.Generator().manual_seed(3))
+    mha = MultiHeadAttention(embed_dim=4, num_heads=1, seed=7)
+    with torch.no_grad():
+        mha.Wo.copy_(torch.eye(4))  # no mixing after the concat
+    head = SelfAttentionHead(embed_dim=4, head_size=4, seed=7)
+
+    mha_out, mha_weights = mha.forward(x)
+    head_out, head_weights = head.forward(x)
+
+    assert torch.allclose(mha_out, head_out, atol=1e-6)
+    assert torch.allclose(mha_weights[0], head_weights)
+
+
+def test_heads_are_not_copies_of_each_other():
+    mha = MultiHeadAttention(embed_dim=8, num_heads=4, seed=0)
+
+    _, weights = mha.forward(torch.randn(5, 8, generator=torch.Generator().manual_seed(4)))
+
+    # Every head gets its own seed, so they look at different places.
+    assert not torch.allclose(weights[0], weights[1])
+    assert not torch.allclose(weights[0], weights[3])
+
+
+def test_multi_head_still_ignores_the_future():
+    mha = MultiHeadAttention(embed_dim=8, num_heads=4)
+    x = torch.randn(5, 8, generator=torch.Generator().manual_seed(5))
+    x_changed = x.clone()
+    x_changed[4] += 100
+
+    before, weights = mha.forward(x)
+    after, _ = mha.forward(x_changed)
+
+    assert torch.allclose(after[:4], before[:4])  # Wo mixes channels, never positions
+    assert not torch.allclose(after[4], before[4])
+    assert torch.equal(weights.triu(diagonal=1), torch.zeros(4, 5, 5))
+
+
+def test_multi_head_gradients_reach_every_head_and_the_projection():
+    mha = MultiHeadAttention(embed_dim=8, num_heads=4)
+
+    out, _ = mha.forward(torch.randn(5, 8))
+    out.sum().backward()
+
+    assert len(mha.parameters()) == 4 * 3 + 1  # Wq/Wk/Wv per head, plus Wo
+    for parameter in mha.parameters():
+        assert parameter.grad is not None
+        assert not torch.allclose(parameter.grad, torch.zeros_like(parameter.grad))
+
+
+def test_multi_head_rejects_an_uneven_split():
+    with pytest.raises(ValueError, match="not divisible"):
+        MultiHeadAttention(embed_dim=10, num_heads=4)
+
+    with pytest.raises(ValueError, match="num_heads"):
+        MultiHeadAttention(embed_dim=8, num_heads=0)

@@ -1,6 +1,6 @@
 # ForgeLM architecture
 
-_Last updated: Sprint 3b_
+_Last updated: Sprint 3c-1_
 
 ## Principle: thin adapters around core logic
 
@@ -32,7 +32,8 @@ _Last updated: Sprint 3b_
 | `forgelm/tokenizer/analysis.py` | `build_tokenizer(kind, corpus, merges)` and `analyze()`, shared by the CLI and API |
 | `forgelm/models/bigram.py` | `BigramModel` (counting), `softmax`, `encode_and_split`, `train_on_text`, JSON checkpoints ([ADR 0003](decisions/0003-checkpoint-format.md)) |
 | `forgelm/models/neural_bigram.py` | PyTorch bigram: `NeuralBigram` (V×V `W`), hand-written `cross_entropy` and `sgd_step`, `train_neural_bigram`. Needs the `ml` extra; imported explicitly, never re-exported ([ADR 0004](decisions/0004-pytorch-optional-extra.md)) |
-| `forgelm/models/attention.py` | Causal mixing of past positions: `causal_mask`, causal average (loop / matmul / masked softmax), `masked_softmax_weights` (3a). `attend(q, k, v)` and `SelfAttentionHead` with learned `Wq/Wk/Wv` (3b). Needs torch |
+| `forgelm/models/attention.py` | Causal mixing of past positions: `causal_mask`, causal average (loop / matmul / masked softmax), `masked_softmax_weights` (3a). `attend(q, k, v)` and `SelfAttentionHead` with learned `Wq/Wk/Wv` (3b). `MultiHeadAttention`: heads in parallel, concatenated, projected by `Wo`, returns the per-head weights (3c). Needs torch |
+| `forgelm/models/block.py` | `FeedForward`: per-position MLP `C -> 4C -> relu -> C`, hand-written `W1/b1/W2/b2`. Attention moves information between positions, this processes it inside one position (3c). Needs torch |
 
 Both `tokenize` adapters follow the same path:
 `input → build_tokenizer(kind, corpus, merges) → analyze(tokenizer, text) → Analysis → print / JSON`
@@ -47,7 +48,9 @@ train-neural-bigram: corpus → encode_and_split() → train_neural_bigram() (SG
 The model only sees integer ids and `vocab_size`; it never sees text.
 
 Torch boundary: nothing under `forgelm/` imports torch at module load except
-`models/neural_bigram.py`, and only the CLI command that needs it imports that module.
+`models/neural_bigram.py`, `models/attention.py` and `models/block.py`. None of them is
+re-exported from `forgelm.models`, and only the CLI command that needs one imports it, so
+ForgeLM still runs without the `ml` extra.
 
 ## Planned modules
 

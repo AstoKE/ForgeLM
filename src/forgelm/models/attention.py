@@ -126,3 +126,73 @@ class SelfAttentionHead:
         if x.ndim != 2 or x.shape[1] != self.embed_dim:
             raise ValueError(f"expected x of shape (T, {self.embed_dim}), got {tuple(x.shape)}")
         return attend(x @ self.Wq, x @ self.Wk, x @ self.Wv)
+
+
+# --- Sprint 3c: many heads at once ----------------------------------------------------
+#
+# One head learns one kind of relation. Several heads, run side by side, can each look
+# for something different ("which verb?", "which vowel?", "where did the quote open?").
+# Their outputs are concatenated and mixed once more by Wo, so the block can decide how
+# to combine what the heads found.
+
+
+class MultiHeadAttention:
+    """`num_heads` independent heads in parallel, concatenated and projected back.
+
+    Each head gets `embed_dim // num_heads` channels, so the concatenation is exactly
+    `embed_dim` wide again and the block keeps the shape `(T, C) -> (T, C)`. That is what
+    lets 3c-2 write the residual `x = x + attention(x)`.
+    """
+
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        device: torch.device | str = "cpu",
+        seed: int = 0,
+    ) -> None:
+        if num_heads < 1:
+            raise ValueError("num_heads must be >= 1")
+        if embed_dim % num_heads != 0:
+            raise ValueError(
+                f"embed_dim {embed_dim} is not divisible by num_heads {num_heads}: "
+                "the heads have to split the channels evenly"
+            )
+        head_size = embed_dim // num_heads
+        # A different seed per head, otherwise every head would start identical and
+        # learn the same thing -- num_heads copies of one head is not multi-head.
+        self.heads = [
+            SelfAttentionHead(embed_dim, head_size, device=device, seed=seed + i)
+            for i in range(num_heads)
+        ]
+        gen = torch.Generator().manual_seed(seed + num_heads)
+        self.Wo = (
+            (torch.randn((embed_dim, embed_dim), generator=gen) * embed_dim**-0.5)
+            .to(device)
+            .requires_grad_(True)
+        )
+
+    @property
+    def embed_dim(self) -> int:
+        return self.Wo.shape[0]
+
+    @property
+    def num_heads(self) -> int:
+        return len(self.heads)
+
+    @property
+    def head_size(self) -> int:
+        return self.embed_dim // self.num_heads
+
+    def parameters(self) -> list[torch.Tensor]:
+        return [p for head in self.heads for p in head.parameters()] + [self.Wo]
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """x: (T, C) -> (output (T, C), weights (num_heads, T, T)).
+
+        The weights of every head are returned separately: they are what an attention
+        heatmap draws, and they show that different heads really do look elsewhere.
+        """
+        outputs, weights = zip(*(head.forward(x) for head in self.heads), strict=True)
+        concatenated = torch.cat(outputs, dim=-1)  # num_heads x (T, H) -> (T, C)
+        return concatenated @ self.Wo, torch.stack(weights)
