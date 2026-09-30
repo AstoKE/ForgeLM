@@ -501,6 +501,24 @@ against 4.406 with them, about 70x.
 Parameter split of one block (embed_dim 64, 8 heads): 49,728 total, of which attention 16,384
 (= 4C^2) and feed-forward 33,088 (~8C^2). Two thirds of a transformer is the MLP.
 
+### Quiz (answered 2026-09-30)
+1. What happens if only `ln1.gamma` is zeroed? -> `ln1(x) = 0 * normalised + beta = 0`, so
+   attention gets an all-zero input: `q = k = v = 0`, the scores are equal and the weights become
+   the plain causal average (row 2 measured as `[1/3, 1/3, 1/3, 0, 0]`) -- but `v = 0`, so the
+   branch adds exactly 0. The FFN branch keeps working on the untouched `x`, so the block is
+   `x + ffn(ln2(x))`, **not** the identity. Note this lands in the same place as `Wq = Wk = 0`
+   from the 3b quiz: zeroing the input and zeroing Q/K both equalise the scores.
+2. Would the identity test pass with post-norm? -> **No.** `LN(x + 0) = LN(x)` is not `x`
+   (verified). In post-norm a block can never step out of the way; it always rescales its input.
+   That is one reason we chose pre-norm.
+3. Isn't LayerNorm a loss of information? -> Two answers. (a) `gamma` and `beta` are learned, so
+   the model can put the scale and the shift back; normalisation is a starting point, not a rule.
+   (b) The pre-norm one: LayerNorm never touches the main road, only the **copy** handed to the
+   sublayer (`x = x + attention(ln1(x))`). The residual stream carries the raw `x` through
+   untouched, so nothing is lost. This would not hold in post-norm.
+4. 6 blocks of 49,728 -> `298,368`, and **no**, that is not MiniGPT's total: the two embedding
+   tables, `ln_final` and the head are parameters too.
+
 ### Mistakes / surprises
 - _(fill in)_
 
@@ -560,6 +578,41 @@ tensors.
   weights do not give uniform logits: the head is `randn * C^-0.5`, so the logits start with a
   spread of about 1 and confidently prefer the wrong tokens. Training fixes it in a few steps.
   A smaller head init would start closer to `ln(V)`
+
+### Quiz (answered 2026-09-30)
+1. `block_size = 128` and a 500-token input -> `forward` raises
+   `ValueError: sequence of 500 tokens is longer than block_size 128`; `generate` keeps the last
+   128 tokens. Deliberately different: in a training loop an over-long sequence is a **bug** in
+   how the batch was built and should shout rather than learn something wrong, while at inference
+   time cropping is the correct behaviour -- the model physically cannot see past seat 128. This
+   is what a "context window" is: it cannot summarise a 500-page book because seat 129 does not
+   exist.
+2. How many training examples in one forward pass? -> **T**. `logits` is `(T, V)` and every row is
+   its own prediction. The **causal mask** is what allows it: row `t` only saw positions `0..t`,
+   so it never saw its own answer. Without the mask row 5 would already have seen token 6 -- that
+   is copying, not predicting -- and you would need T separate forward passes on truncated
+   inputs. This is the single biggest reason transformers train fast, and something an RNN cannot
+   do.
+3. Does memorising the sentence mean the model is good? -> **No.** 26,688 parameters for 18
+   characters is room to store the answer, and the overfitting is deliberate. It **proves** the
+   wiring: gradients reach all 89 tensors, residual / LayerNorm / attention / embeddings are
+   connected correctly, and the model really uses context (a bigram cannot produce this string).
+   It proves **nothing** about generalisation -- there is no validation split yet. It is a unit
+   test, not a benchmark.
+4. How much of the 215,680 parameters is embeddings? ->
+   ```
+   token_embedding         4,224    2.0%
+   position_embedding      8,192    3.8%
+   blocks (4x)           198,912   92.2%
+   ln_final                  128    0.1%
+   head                    4,224    2.0%
+   both tables            12,416    5.8%
+   ```
+   Tiny here, because the vocabulary is 66 characters. GPT-2 small inverts it: token_embedding is
+   38,597,376 of ~124M (**31.1%**) and the position table only 786,432 (0.6%). A third of the
+   model sits in one table, which is exactly why GPT-2 ties the head to `token_embedding` --
+   keeping them separate would add another 31%. Also worth noticing: knowing *where* you are is
+   about 50x cheaper than knowing *which token* you are.
 
 ### Lessons
 - _(fill in, in your own words)_

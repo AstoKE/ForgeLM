@@ -37,7 +37,7 @@ understand, debug and extend everything in this repo.
   head, `forward` / `loss` / `generate`).
   172 tests. Proof it works end to end: plain SGD memorises `"to be or not to be"` (loss
   4.35 → 0.0009 in 300 steps) and greedy decoding reproduces it exactly, which a bigram cannot
-  do. The 3c-2 quiz is still unanswered (see `docs/learning-log.md`).
+  do. All 3c quizzes answered.
 - ⏳ **Next: Sprint 3d**, train MiniGPT on Tiny Shakespeare on the GPU: batching over random
   windows, a train/val loop, probably Adam instead of hand-written SGD, torch checkpoints with a
   new ADR, and `train-minigpt` / `generate` CLI commands. Start with a concept briefing, in
