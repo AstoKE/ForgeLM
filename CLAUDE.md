@@ -25,10 +25,15 @@ understand, debug and extend everything in this repo.
   (train 2.456 vs 2.455) in 3000 steps / 15 s on GPU.
 - ✅ **Sprint 3a: Causal averaging.** `forgelm.models.attention`: `causal_mask`, the causal
   average written 3 ways (loop, matmul, mask + softmax), `masked_softmax_weights`.
-- ⏳ **Next: Sprint 3b, single-head self-attention.** Learned scores instead of equal weights:
-  Q/K/V, scores = Q·Kᵀ / √d, reuse `masked_softmax_weights`. Then 3c (block: multi-head, MLP,
-  residual, LayerNorm, position embeddings) and 3d (train MiniGPT on GPU, torch checkpoints
-  with a new ADR, probably Adam). Start with a concept briefing, in simple language.
+- ✅ **Sprint 3b: Single-head self-attention.** `attend(q, k, v)` and `SelfAttentionHead`
+  (hand-written `Wq/Wk/Wv`, scores = Q·Kᵀ / √d, reuses `masked_softmax_weights`). Untrained, so
+  the weights are random. Zero Q/K reproduces the 3a average. The 3b quiz is still unanswered
+  (see `docs/learning-log.md`).
+- ⏳ **Next: Sprint 3c**, the full block: multi-head, MLP, residual, LayerNorm, position
+  embeddings. Then 3d (train MiniGPT on GPU, torch checkpoints with a new ADR, probably Adam).
+  Start with a concept briefing, in simple language.
+- 💡 **Backlog: a web UI** served by FastAPI at `/ui` (tokenizer, generate and attention
+  heatmap panels; needs `POST /generate` and `POST /attention`). Agreed to do it later.
 
 Environment: torch 2.14.0+cu130 in `.venv` (CUDA 13.0 driver, RTX 4060 8 GB). Install with
 `pip install torch --index-url https://download.pytorch.org/whl/cu130` then `pip install -e ".[dev,ml]"`.

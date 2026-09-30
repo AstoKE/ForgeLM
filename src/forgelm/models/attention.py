@@ -10,6 +10,9 @@ plain average, and computes it three equivalent ways:
 
 Shapes: x is (T, C): T positions ("time"), C numbers per position ("channels").
 Position t may only look at positions 0..t, never at the future (causal).
+
+Sprint 3b (bottom of this file) replaces the equal scores by learned ones:
+single-head self-attention with query / key / value.
 """
 
 import torch
@@ -66,3 +69,60 @@ def causal_average_softmax(x: torch.Tensor) -> torch.Tensor:
     T = x.shape[0]
     scores = torch.zeros(T, T, device=x.device)  # nobody is preferred over anybody
     return masked_softmax_weights(scores) @ x
+
+
+# --- Sprint 3b: the scores are learned ------------------------------------------------
+#
+# Every position makes three vectors from its x (each is x @ a learned matrix):
+#     query  q: "what am I looking for?"
+#     key    k: "what do I contain?"          (a label other positions can match against)
+#     value  v: "what do I give if chosen?"
+# score[t, s] = q_t . k_s tells how relevant position s is for position t.
+
+
+def attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Scores -> weights -> mix of values. q, k: (T, H), v: (T, D).
+
+    Returns (output (T, D), weights (T, T)).
+    """
+    head_size = q.shape[-1]
+    # (T, H) @ (H, T) -> (T, T). Dividing by sqrt(H) keeps the scores from growing
+    # with H: big scores make softmax "winner takes all" and the gradients tiny.
+    scores = q @ k.T / head_size**0.5
+    weights = masked_softmax_weights(scores)  # the same function as in 3a
+    return weights @ v, weights
+
+
+class SelfAttentionHead:
+    """One attention head with three learned matrices, written by hand like NeuralBigram."""
+
+    def __init__(
+        self,
+        embed_dim: int,
+        head_size: int,
+        device: torch.device | str = "cpu",
+        seed: int = 0,
+    ) -> None:
+        if embed_dim < 1 or head_size < 1:
+            raise ValueError("embed_dim and head_size must be >= 1")
+        gen = torch.Generator().manual_seed(seed)
+        # Small random numbers scaled by 1/sqrt(C), so q, k, v have a size similar to x.
+        # (Not zeros as in NeuralBigram: with equal matrices every head would learn the same.)
+        shape = (embed_dim, head_size)
+        self.Wq, self.Wk, self.Wv = (
+            (torch.randn(shape, generator=gen) * embed_dim**-0.5).to(device).requires_grad_(True)
+            for _ in range(3)
+        )
+
+    @property
+    def embed_dim(self) -> int:
+        return self.Wq.shape[0]
+
+    def parameters(self) -> list[torch.Tensor]:
+        return [self.Wq, self.Wk, self.Wv]
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """x: (T, C) -> (output (T, head_size), weights (T, T))."""
+        if x.ndim != 2 or x.shape[1] != self.embed_dim:
+            raise ValueError(f"expected x of shape (T, {self.embed_dim}), got {tuple(x.shape)}")
+        return attend(x @ self.Wq, x @ self.Wk, x @ self.Wv)

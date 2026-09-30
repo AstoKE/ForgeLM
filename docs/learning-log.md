@@ -324,3 +324,47 @@ Long runs (3000 steps, ~15 s on GPU):
 
 ### Open questions
 - _(fill in)_
+
+---
+
+## Sprint 3b: Single-head self-attention (2026-09-30)
+
+### Concepts
+- Every position makes three vectors from its `x`: **query** ("what am I looking for?"),
+  **key** ("what do I contain?") and **value** ("what do I give if chosen?"), each `x @ W`
+- **Score** `q_t · k_s` says how relevant position s is for position t. All pairs at once:
+  `q @ k.T`, a `(T, T)` table (the learned version of 3a's triangle)
+- **Scaling by √head_size**: dot products grow with the vector length, and big scores make
+  softmax "winner takes all"
+- Then the 3a machinery: mask + softmax, and `output = weights @ v`
+- Zero Q/K means equal scores, which is exactly the 3a average, so 3b generalizes 3a
+- Random init (not zeros): with equal matrices every head would learn the same thing
+
+### What we built
+- `forgelm.models.attention`: `attend(q, k, v)` and `SelfAttentionHead` (`Wq`, `Wk`, `Wv`
+  written by hand, no `nn.Linear`). `forward` returns the output and the weights
+- 9 new tests (128 total). Key ones: a hand-computed example, zero Q/K equals the 3a average,
+  changing the future doesn't change the past, gradients reach all three matrices
+- Not trained yet, so the weights are random and mean nothing. Training comes in 3d
+
+### Experiment: hand example, 3 tokens, head_size 4
+Scaled scores for the last token: `[2, 0, 1]` -> weights `[0.665, 0.090, 0.245]` ->
+output `[7.876, 2.124]`. The 3a average gave `[5, 5]`. (The briefing rounded this to
+`[7.875, 2.125]`; the exact result is 7.876 / 2.124.)
+
+### Mistakes / surprises
+- _(fill in after the quiz)_
+
+### Quiz (unanswered, to do next session)
+1. Scores `[2, 0, 1]`: if token 1's score goes from 0 to 5, what happens to the weights of
+   token 1 and token 0?
+2. If I change the last row of `x`, which output rows change?
+3. `head_size = 64` and no `/ sqrt`: do the scores get bigger or smaller, and what does
+   softmax do?
+4. If `Wq` and `Wk` are zero, what does attention become?
+
+### Lessons
+- _(fill in, in your own words)_
+
+### Open questions
+- _(fill in)_

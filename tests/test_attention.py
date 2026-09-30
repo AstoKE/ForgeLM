@@ -3,6 +3,8 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from forgelm.models.attention import (  # noqa: E402
+    SelfAttentionHead,
+    attend,
     causal_average_loop,
     causal_average_matmul,
     causal_average_softmax,
@@ -91,3 +93,97 @@ def test_single_position_returns_itself():
 
     for average in VERSIONS:
         assert torch.allclose(average(x), x)
+
+
+# --- Sprint 3b: self-attention ---------------------------------------------------------
+
+
+def test_attend_matches_the_hand_computed_example():
+    # head_size 4 -> scores are divided by sqrt(4) = 2. Row 2 of q.k^T is [4, 0, 2],
+    # so the scaled scores are [2, 0, 1] and the weights are softmax([2, 0, 1]).
+    q = torch.zeros(3, 4)
+    q[2] = 1.0
+    k = torch.tensor([[1.0, 1, 1, 1], [0.0, 0, 0, 0], [1.0, 1, 0, 0]])
+    v = torch.tensor([[10.0, 0.0], [0.0, 10.0], [5.0, 5.0]])
+
+    out, weights = attend(q, k, v)
+
+    assert weights[2].tolist() == pytest.approx([0.6652, 0.0900, 0.2447], abs=1e-4)
+    assert out[2].tolist() == pytest.approx([7.876, 2.124], abs=1e-3)  # 3a's average gave [5, 5]
+
+
+def test_attend_with_zero_q_and_k_is_the_plain_causal_average():
+    # Zero scores = nobody preferred = exactly what 3a computed.
+    x = torch.randn(6, 3, generator=torch.Generator().manual_seed(1))
+
+    out, _ = attend(torch.zeros(6, 2), torch.zeros(6, 2), x)
+
+    assert torch.allclose(out, causal_average_matmul(x), atol=1e-6)
+
+
+def test_head_output_and_weights_have_the_right_shapes():
+    head = SelfAttentionHead(embed_dim=8, head_size=4)
+
+    out, weights = head.forward(torch.randn(5, 8))
+
+    assert out.shape == (5, 4)  # one output per position, head_size numbers each
+    assert weights.shape == (5, 5)
+
+
+def test_head_weights_rows_sum_to_one_and_ignore_the_future():
+    head = SelfAttentionHead(embed_dim=8, head_size=4)
+
+    _, weights = head.forward(torch.randn(5, 8))
+
+    assert torch.allclose(weights.sum(dim=1), torch.ones(5), atol=1e-6)
+    assert torch.equal(weights.triu(diagonal=1), torch.zeros(5, 5))
+
+
+def test_head_changing_the_future_does_not_change_the_past():
+    head = SelfAttentionHead(embed_dim=8, head_size=4)
+    x = torch.randn(5, 8, generator=torch.Generator().manual_seed(2))
+    x_changed = x.clone()
+    x_changed[4] += 100  # only the last position changes
+
+    before, _ = head.forward(x)
+    after, _ = head.forward(x_changed)
+
+    assert torch.allclose(after[:4], before[:4])  # positions 0..3 can't see position 4
+    assert not torch.allclose(after[4], before[4])
+
+
+def test_head_is_reproducible_and_seed_changes_it():
+    x = torch.randn(4, 8)
+
+    a, _ = SelfAttentionHead(8, 4, seed=0).forward(x)
+    b, _ = SelfAttentionHead(8, 4, seed=0).forward(x)
+    c, _ = SelfAttentionHead(8, 4, seed=1).forward(x)
+
+    assert torch.equal(a, b)
+    assert not torch.allclose(a, c)
+
+
+def test_gradients_reach_all_three_matrices():
+    head = SelfAttentionHead(embed_dim=8, head_size=4)
+
+    out, _ = head.forward(torch.randn(5, 8))
+    out.sum().backward()
+
+    for w in head.parameters():
+        assert w.grad is not None and w.grad.abs().sum() > 0
+
+
+def test_head_rejects_wrong_input_shape():
+    head = SelfAttentionHead(embed_dim=8, head_size=4)
+
+    with pytest.raises(ValueError, match="expected x of shape"):
+        head.forward(torch.randn(5, 7))  # wrong number of channels
+    with pytest.raises(ValueError, match="expected x of shape"):
+        head.forward(torch.randn(2, 5, 8))  # a batch dimension we don't support (yet)
+
+
+def test_head_rejects_invalid_sizes():
+    with pytest.raises(ValueError, match=">= 1"):
+        SelfAttentionHead(embed_dim=0, head_size=4)
+    with pytest.raises(ValueError, match=">= 1"):
+        SelfAttentionHead(embed_dim=8, head_size=0)
