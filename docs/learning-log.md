@@ -619,3 +619,89 @@ tensors.
 
 ### Open questions
 - _(fill in)_
+
+
+---
+
+## Sprint 3d: Training MiniGPT and saving it (2026-10-05)
+
+### Concepts
+- **Random windows**: cut `T` tokens from a random place, and `y` is the same window shifted by
+  one. One window is `T` training examples (3c-3)
+- **Adam** keeps two running averages per parameter, `m` (the gradient) and `v` (the gradient
+  squared), and steps by `lr * m / (sqrt(v) + eps)`. Dividing by `sqrt(v)` cancels the size of the
+  gradient: with a constant gradient every step is about `lr`, whether the gradient is 0.01 or
+  100. SGD would move those two parameters 10,000x apart. Bias correction `1 - b^t` fixes `m`
+  and `v` being too small at the start (they begin at 0)
+- **Perplexity** = `e^loss`: roughly "between how many equally likely tokens the model hesitates".
+  66 for guessing, 12 for the bigram, 6.4 for MiniGPT
+- **Train/val gap**: train 1.68 vs val 1.85. Mild overfitting. The warning sign is val loss
+  rising while train keeps falling. Fixes: stop early (keep the best-val checkpoint), more data,
+  a smaller model, dropout or weight decay
+- **Epochs**: 2000 steps x 16 windows x 64 tokens is about 2 passes over the 1M-character corpus
+- **A checkpoint** is weights + hyperparameters + tokenizer. `torch.load(weights_only=True)`
+  refuses anything but tensors and basic values, so a shared file cannot run code
+  ([ADR 0005](decisions/0005-minigpt-checkpoint.md))
+
+### What we built
+- `models/train_minigpt.py`: `get_batch`, `Adam`, `estimate_loss`, `train_minigpt`,
+  `train_minigpt_on_text` (3d-1, 18 tests). The Adam test follows `torch.optim.Adam` for 25 steps
+- `save_minigpt` / `load_minigpt` with checks for the version, the tensor count and every shape
+  (3d-2). A test shows a pickle with hidden code is refused
+- `forgelm train-minigpt`, and `generate --model x.pt` (the extension picks the loader)
+- 203 tests in total (75 new since 3b's 128 = 44 from 3c, 18 + 13 from 3d)
+
+### Experiment: Tiny Shakespeare, 211,584 params, 4 blocks, embed 64, context 64, Adam lr 3e-3
+
+| | val loss | perplexity |
+|---|---|---|
+| uniform | 4.190 | 66 |
+| bigram | 2.482 | 12 |
+| MiniGPT, 2000 steps | **1.853** | **6.4** |
+
+- Output has Shakespeare's shape (`QUEEN ELIZABETH:` and line breaks) but is still nonsense words
+- Same seed, same text before and after saving and loading, so the round trip loses nothing
+- Checkpoint: 871 KB, against 4.5 MB for the same weights as JSON text (5.2x)
+- **The GPU was slower than the CPU**: 22.3 s vs 11.6 s per 100 steps, with identical losses. The
+  batch is a loop over 16 windows, each made of hundreds of tiny operations, so launching the
+  work costs more than doing it. A `(B, T)` batch dimension would fix it
+
+### Mistakes / surprises
+- Warm-up: constant gradient 0.01, `lr = 0.1`, 1000 steps. I answered SGD 1001 and Adam 1010.
+  The answers are **1.0** and **100**. I counted steps instead of distance: `1000 x step size`.
+  SGD's step is `lr x gradient = 0.001`; Adam's is about `lr = 0.1`
+- Prediction for 20,000 steps: "val loss goes down". Probably true for a while, but 20,000 steps
+  is about 20 epochs, and a model with 211k parameters can memorise 1M characters, so I expect
+  val to flatten and then rise while train keeps falling. **Not measured** (about 40 min on CPU)
+- My first `get_batch` copied the whole corpus to the CPU at every step. Keeping the data on
+  the device and moving only the random starts fixed it
+- `torch.load` raises a different exception for each kind of garbage file (`IndexError` for
+  random bytes), so `load_minigpt` catches `Exception` once and raises one clear `ValueError`
+- A CLI test failed because an untrained model sampled `<unk>`, which prints as 5 characters
+
+### Quiz (answered 2026-10-05)
+1. Train loss 1.675 and val loss 1.842. Is that overfitting? -> **Right conclusion**: mild
+   overfitting. My reason was only "the gap is small". The better evidence is the **trend**: val
+   was still falling together with train, and the val estimate itself wobbles by about +-0.05
+   (8 random windows), so one gap number says little
+2. Why does `load_minigpt` build a random model first? -> **Did not know.** A checkpoint holds
+   only numbers. The structure (which tensor belongs to which layer, how `forward` uses them) is
+   *code*. Building the model from `config` gives the empty shelves, with the right shapes, device
+   and `requires_grad=True`; `copy_` then puts the numbers in place. The random values are
+   overwritten and never used
+3. Why is a checkpoint without `config` useless? -> **Vague**: "it wouldn't know where it stopped".
+   That is a different thing (resuming training needs the optimizer state and the step count,
+   which we do not save, see ADR 0005). Without `config` we would not know the **shape** of the
+   model to build. Some of it can be guessed from tensor shapes (embed_dim, vocab_size), the
+   number of heads only from counting tensors (3 per head), and nothing checks the guess. The
+   config makes it explicit
+4. Why is the GPU slower, and what would speed it up? -> **Did not know.** A GPU is fast at one
+   big operation, but every operation has a fixed launch cost. We run 16 windows one by one, each
+   made of many tiny operations, so launching costs more than computing. A `(B, T)` batch would
+   push all 16 windows through each operation at once
+
+### Lessons
+- _(fill in, in your own words)_
+
+### Open questions
+- _(fill in)_

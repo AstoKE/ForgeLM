@@ -170,3 +170,71 @@ def test_tokenize_missing_corpus_file_fails(tmp_path, capsys):
 
     assert exc.value.code == 2
     assert "cannot read file" in capsys.readouterr().err
+
+
+@pytest.fixture
+def trained_minigpt(tmp_path, capsys):
+    pytest.importorskip("torch")
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("to be or not to be, that is the question.\n" * 20, encoding="utf-8")
+    model = tmp_path / "ckpt" / "minigpt.pt"
+    args = ["train-minigpt", "--corpus", str(corpus), "--out", str(model), "--steps", "10"]
+    tiny = ["--embed-dim", "16", "--heads", "2", "--blocks", "1", "--block-size", "8"]
+
+    assert main([*args, *tiny, "--batch-size", "2", "--eval-every", "5", "--device", "cpu"]) == 0
+    out = capsys.readouterr().out
+    assert "device cpu" in out
+    assert "uniform baseline loss" in out
+    assert "step     0" in out
+    assert "step    10" in out
+    assert f"saved {model}" in out
+    return model
+
+
+def test_generate_from_a_minigpt_checkpoint_is_reproducible(trained_minigpt, capsys):
+    args = ["generate", "--model", str(trained_minigpt), "--prompt", "to", "--max-tokens", "20"]
+
+    main([*args, "--seed", "7"])
+    first = capsys.readouterr().out
+    main([*args, "--seed", "7"])
+    second = capsys.readouterr().out
+
+    assert first == second
+    assert first.startswith("to")
+    assert len(first.rstrip("\n")) > len("to")  # something was generated after the prompt
+
+
+def test_generate_rejects_a_broken_pt_file(tmp_path, capsys):
+    pytest.importorskip("torch")
+    bad = tmp_path / "bad.pt"
+    bad.write_bytes(b"not a checkpoint")
+
+    with pytest.raises(SystemExit) as exc:
+        main(["generate", "--model", str(bad)])
+
+    assert exc.value.code == 2
+    assert "cannot load model" in capsys.readouterr().err
+
+
+def test_train_minigpt_rejects_embed_dim_not_divisible_by_heads(tmp_path, capsys):
+    pytest.importorskip("torch")
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("hello world " * 50, encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        main(["train-minigpt", "--corpus", str(corpus), "--embed-dim", "10", "--heads", "4"])
+
+    assert exc.value.code == 2
+    assert "divisible" in capsys.readouterr().err
+
+
+def test_train_minigpt_without_torch_fails_clearly(tmp_path, capsys, monkeypatch):
+    monkeypatch.setitem(sys.modules, "torch", None)
+    for name in ("minigpt", "neural_bigram", "train_minigpt", "block", "attention"):
+        monkeypatch.delitem(sys.modules, f"forgelm.models.{name}", raising=False)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["train-minigpt", "--corpus", str(tmp_path / "x.txt")])
+
+    assert exc.value.code == 2
+    assert "PyTorch is not installed" in capsys.readouterr().err

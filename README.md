@@ -14,7 +14,7 @@ Each sprint adds one concept to the same product. What I learned in each one is 
 | 0 | Engineering setup: package, CLI, API, tests, lint | ✅ |
 | 1 | Tokenizer playground: char tokenizer → byte-level BPE | ✅ |
 | 2 | Tiny language model: counting bigram → neural bigram (PyTorch) | ✅ |
-| 3 | Transformer / MiniGPT from scratch | ⏳ |
+| 3 | Transformer / MiniGPT from scratch: attention → block → trained MiniGPT | ✅ |
 | 4 | Training and inference dashboard | |
 | 5 | Open-source LLM integration (Ollama / llama.cpp / HF) | |
 | 6 | LoRA / QLoRA fine-tuning | |
@@ -68,6 +68,14 @@ forgelm generate --prompt "ROMEO:" --max-tokens 200 --seed 42 --temperature 0.8
 
 # Same model, learned with gradient descent instead of counting (needs the ml extra)
 forgelm train-neural-bigram --corpus data/tinyshakespeare.txt --steps 3000 --lr 100
+```
+
+### Train and sample MiniGPT (needs the ml extra)
+
+```powershell
+# ~4 min on CPU for 2000 steps (val loss ~1.85, perplexity ~6.4; the bigram is 2.48 / 12)
+forgelm train-minigpt --corpus data/tinyshakespeare.txt --steps 2000 --device cpu
+forgelm generate --model checkpoints/minigpt.pt --prompt "ROMEO:" --max-tokens 250 --seed 42 --temperature 0.8
 ```
 
 ## Development

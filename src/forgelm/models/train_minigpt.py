@@ -18,6 +18,7 @@ import torch
 from forgelm.models.bigram import encode_and_split
 from forgelm.models.minigpt import MiniGPT
 from forgelm.models.neural_bigram import TrainHistory, pick_device
+from forgelm.tokenizer import CharTokenizer
 
 
 class Adam:
@@ -169,7 +170,11 @@ def train_minigpt(
 
 def train_minigpt_on_text(
     text: str, val_fraction: float = 0.1, **kwargs
-) -> tuple[MiniGPT, TrainHistory]:
-    """Char-tokenize and split `text` like the bigram models, then train MiniGPT."""
+) -> tuple[MiniGPT, CharTokenizer, TrainHistory]:
+    """Char-tokenize and split `text` like the bigram models, then train MiniGPT.
+
+    The tokenizer is returned too: the model's ids mean nothing without it.
+    """
     tokenizer, train_ids, val_ids = encode_and_split(text, val_fraction)
-    return train_minigpt(train_ids, val_ids, tokenizer.vocab_size, **kwargs)
+    model, history = train_minigpt(train_ids, val_ids, tokenizer.vocab_size, **kwargs)
+    return model, tokenizer, history

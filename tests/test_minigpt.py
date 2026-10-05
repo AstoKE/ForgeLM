@@ -4,7 +4,8 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from forgelm.models.minigpt import MiniGPT  # noqa: E402
+from forgelm.models.minigpt import MiniGPT, load_minigpt, save_minigpt  # noqa: E402
+from forgelm.tokenizer import CharTokenizer  # noqa: E402
 
 VOCAB = 66
 
@@ -213,3 +214,102 @@ def test_the_model_can_learn_one_short_sentence_end_to_end():
     assert loss.item() < 0.05  # and memorised the sentence
     greedy = model.generate([stoi["t"]], len(text) - 1, temperature=0)
     assert "".join(chars[i] for i in greedy) == text
+
+
+# --- checkpoints (Sprint 3d-2, ADR 0005) ----------------------------------------------------
+
+
+def tokenizer_for(vocab_size: int) -> CharTokenizer:
+    return CharTokenizer(["<unk>", *"abcdefghijklmnopqrstuvwxyz"[: vocab_size - 1]])
+
+
+def test_save_and_load_give_the_same_logits(tmp_path):
+    model = small_model(vocab_size=10, seed=5)
+    path = tmp_path / "nested" / "gpt.pt"  # the folder does not exist yet
+    save_minigpt(path, model, tokenizer_for(10))
+
+    loaded, tokenizer = load_minigpt(path)
+
+    ids = torch.tensor([1, 4, 2, 7, 3])
+    assert torch.equal(model.forward(ids)[0], loaded.forward(ids)[0])  # bit for bit
+    assert loaded.config() == model.config()
+    assert tokenizer.vocab_size == 10
+
+
+def test_loaded_weights_are_a_copy_and_trainable(tmp_path):
+    model = small_model(vocab_size=10)
+    save_minigpt(tmp_path / "gpt.pt", model, tokenizer_for(10))
+
+    loaded, _ = load_minigpt(tmp_path / "gpt.pt")
+
+    assert all(p.requires_grad for p in loaded.parameters())  # training can resume
+    with torch.no_grad():
+        loaded.token_embedding.zero_()
+    assert model.token_embedding.abs().sum() > 0  # changing the copy leaves the original alone
+
+
+def test_config_rebuilds_a_model_of_the_same_shape():
+    model = small_model(hidden_dim=20)
+
+    rebuilt = MiniGPT(**model.config())
+
+    assert [p.shape for p in rebuilt.parameters()] == [p.shape for p in model.parameters()]
+
+
+def test_save_refuses_a_tokenizer_that_does_not_match(tmp_path):
+    with pytest.raises(ValueError, match="vocab size"):
+        save_minigpt(tmp_path / "gpt.pt", small_model(vocab_size=10), tokenizer_for(5))
+
+
+def test_load_rejects_a_file_that_is_not_a_checkpoint(tmp_path):
+    path = tmp_path / "junk.pt"
+    path.write_bytes(b"this is not a torch file")
+
+    with pytest.raises(ValueError, match="not a MiniGPT checkpoint"):
+        load_minigpt(path)
+
+
+def test_load_rejects_a_wrong_format_version(tmp_path):
+    path = tmp_path / "gpt.pt"
+    save_minigpt(path, small_model(vocab_size=10), tokenizer_for(10))
+    checkpoint = torch.load(path, weights_only=True)
+    checkpoint["format_version"] = 99
+    torch.save(checkpoint, path)
+
+    with pytest.raises(ValueError, match="format_version"):
+        load_minigpt(path)
+
+
+def test_load_rejects_a_weight_with_the_wrong_shape(tmp_path):
+    path = tmp_path / "gpt.pt"
+    save_minigpt(path, small_model(vocab_size=10), tokenizer_for(10))
+    checkpoint = torch.load(path, weights_only=True)
+    checkpoint["model"]["weights"][0] = torch.zeros(3, 3)
+    torch.save(checkpoint, path)
+
+    with pytest.raises(ValueError, match="tensor 0: checkpoint shape"):
+        load_minigpt(path)
+
+
+def test_load_rejects_a_missing_tensor(tmp_path):
+    path = tmp_path / "gpt.pt"
+    save_minigpt(path, small_model(vocab_size=10), tokenizer_for(10))
+    checkpoint = torch.load(path, weights_only=True)
+    checkpoint["model"]["weights"].pop()
+    torch.save(checkpoint, path)
+
+    with pytest.raises(ValueError, match="tensors, the model needs"):
+        load_minigpt(path)
+
+
+def test_load_does_not_run_code_hidden_in_the_file(tmp_path):
+    # The point of weights_only=True: a pickled object with code in it is refused, not run.
+    class Evil:
+        def __reduce__(self):
+            return (print, ("pwned",))
+
+    path = tmp_path / "evil.pt"
+    torch.save({"format_version": 1, "payload": Evil()}, path)
+
+    with pytest.raises(ValueError, match="not a MiniGPT checkpoint"):
+        load_minigpt(path)

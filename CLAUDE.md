@@ -38,11 +38,18 @@ understand, debug and extend everything in this repo.
   172 tests. Proof it works end to end: plain SGD memorises `"to be or not to be"` (loss
   4.35 → 0.0009 in 300 steps) and greedy decoding reproduces it exactly, which a bigram cannot
   do. All 3c quizzes answered.
-- ⏳ **Next: Sprint 3d**, train MiniGPT on Tiny Shakespeare on the GPU: batching over random
-  windows, a train/val loop, probably Adam instead of hand-written SGD, torch checkpoints with a
-  new ADR, and `train-minigpt` / `generate` CLI commands. Start with a concept briefing, in
-  simple language. Expect Shakespeare-shaped nonsense, not a chatbot -- a real assistant arrives
-  in Sprint 5 with an open-source model.
+- ✅ **Sprint 3d: Training MiniGPT.** `models/train_minigpt.py` (random windows, hand-written
+  `Adam` checked against `torch.optim.Adam`, train/val loop), `save_minigpt` / `load_minigpt`
+  ([ADR 0005](docs/decisions/0005-minigpt-checkpoint.md): `torch.save` + `weights_only=True`),
+  `forgelm train-minigpt`, and `generate --model x.pt`. 203 tests. Tiny Shakespeare, 211,584
+  params, 2000 steps on CPU (~4 min): val loss **1.85** (perplexity 6.4) vs bigram 2.48 (12).
+  The 3d quiz is still unanswered (see `docs/learning-log.md`). Known limits, left on purpose:
+  the batch is a Python loop over single windows (no `(B, T)` dimension), so the GPU is *slower*
+  than the CPU (22 s vs 12 s per 100 steps); no best-val checkpoint; Adam state is not saved.
+- ⏳ **Next: Sprint 4, training dashboard.** Before it, decide whether to add the `(B, T)` batch
+  dimension (touches `attention.py`, `block.py`, `minigpt.py`; needs approval) and whether to run
+  the 20,000-step overfitting experiment (~40 min CPU). Start with a concept briefing, in simple
+  language.
 - 💡 **Backlog: a web UI** served by FastAPI at `/ui` (tokenizer, generate and attention
   heatmap panels; needs `POST /generate` and `POST /attention`). Agreed to do it later.
 

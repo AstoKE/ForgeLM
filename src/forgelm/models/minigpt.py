@@ -23,10 +23,15 @@ model looked at the whole past instead of one token.
 Requires the optional `ml` extra (torch).
 """
 
+from pathlib import Path
+
 import torch
 
 from forgelm.models.block import LayerNorm, TransformerBlock
 from forgelm.models.neural_bigram import cross_entropy
+from forgelm.tokenizer import CharTokenizer
+
+CHECKPOINT_FORMAT_VERSION = 1
 
 
 class MiniGPT:
@@ -79,6 +84,17 @@ class MiniGPT:
     def block_size(self) -> int:
         """The longest sequence the model can see: the height of the position table."""
         return self.position_embedding.shape[0]
+
+    def config(self) -> dict:
+        """The hyperparameters that rebuild an empty model of the same shape."""
+        return {
+            "vocab_size": self.vocab_size,
+            "embed_dim": self.embed_dim,
+            "num_heads": self.blocks[0].attention.num_heads,
+            "num_blocks": len(self.blocks),
+            "block_size": self.block_size,
+            "hidden_dim": self.blocks[0].feedforward.W1.shape[1],
+        }
 
     def parameters(self) -> list[torch.Tensor]:
         return [
@@ -145,3 +161,66 @@ class MiniGPT:
                 probs = torch.softmax(last / temperature, dim=-1)
                 ids.append(int(torch.multinomial(probs, 1, generator=generator)))
         return ids
+
+
+def save_minigpt(path: str | Path, model: MiniGPT, tokenizer: CharTokenizer) -> None:
+    """Save weights, hyperparameters *and* tokenizer in one file (ADR 0005).
+
+    The weights are a plain list of tensors in `model.parameters()` order, loaded back
+    with `torch.load(weights_only=True)`, which refuses anything that is not a tensor
+    or a basic Python value, so a shared file cannot run code.
+    """
+    if model.vocab_size != tokenizer.vocab_size:
+        raise ValueError("model and tokenizer disagree on vocab size")
+    checkpoint = {
+        "format_version": CHECKPOINT_FORMAT_VERSION,
+        "tokenizer": tokenizer.to_dict(),
+        "model": {
+            "type": "minigpt",
+            "config": model.config(),
+            "weights": [p.detach().cpu() for p in model.parameters()],
+        },
+    }
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(checkpoint, path)
+
+
+def load_minigpt(
+    path: str | Path, device: torch.device | str = "cpu"
+) -> tuple[MiniGPT, CharTokenizer]:
+    try:
+        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    except OSError:
+        raise  # a missing or unreadable file is a different problem from a corrupt one
+    except Exception as exc:  # noqa: BLE001
+        # torch.load raises a different error type for each way a file can be garbage
+        # (UnpicklingError, RuntimeError, EOFError, IndexError...): one clear message instead.
+        raise ValueError(f"not a MiniGPT checkpoint: {exc}") from exc
+    if not isinstance(checkpoint, dict):
+        raise ValueError("not a MiniGPT checkpoint: expected a dict")
+    version = checkpoint.get("format_version")
+    if version != CHECKPOINT_FORMAT_VERSION:
+        raise ValueError(f"unsupported checkpoint format_version: {version!r}")
+    saved = checkpoint["model"]
+    if saved.get("type") != "minigpt":
+        raise ValueError(f"not a minigpt model: type={saved.get('type')!r}")
+
+    tokenizer = CharTokenizer.from_dict(checkpoint["tokenizer"])
+    model = MiniGPT(**saved["config"], device=device)  # random weights, right shapes
+    if model.vocab_size != tokenizer.vocab_size:
+        raise ValueError("checkpoint model and tokenizer disagree on vocab size")
+
+    weights = saved["weights"]
+    params = model.parameters()
+    if len(weights) != len(params):
+        raise ValueError(f"checkpoint has {len(weights)} tensors, the model needs {len(params)}")
+    with torch.no_grad():  # copying numbers in is not something autograd should record
+        for i, (param, weight) in enumerate(zip(params, weights, strict=True)):
+            if param.shape != weight.shape:
+                raise ValueError(
+                    f"tensor {i}: checkpoint shape {tuple(weight.shape)}"
+                    f" != model shape {tuple(param.shape)}"
+                )
+            param.copy_(weight)
+    return model, tokenizer

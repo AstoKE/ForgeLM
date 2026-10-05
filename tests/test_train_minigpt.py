@@ -178,12 +178,13 @@ def test_estimate_loss_is_close_to_ln_v_for_an_untrained_model_and_does_not_trai
 def test_train_minigpt_on_text_runs_end_to_end():
     text = "to be or not to be " * 30
 
-    _, history = train_minigpt_on_text(
+    _, tokenizer, history = train_minigpt_on_text(
         text, steps=5, batch_size=2, block_size=8, embed_dim=16, num_heads=2,
         num_blocks=1, eval_every=5, eval_batches=1, device="cpu",
     )  # fmt: skip
 
     assert history.steps == [0, 5]
+    assert tokenizer.decode(tokenizer.encode("to be")) == "to be"
 
 
 def test_train_rejects_invalid_arguments():
