@@ -15,7 +15,7 @@ Each sprint adds one concept to the same product. What I learned in each one is 
 | 1 | Tokenizer playground: char tokenizer → byte-level BPE | ✅ |
 | 2 | Tiny language model: counting bigram → neural bigram (PyTorch) | ✅ |
 | 3 | Transformer / MiniGPT from scratch: attention → block → trained MiniGPT | ✅ |
-| 4 | Training and inference dashboard | |
+| 4 | Training and inference dashboard (4a: inference UI ✅, 4b: live training) | ⏳ |
 | 5 | Open-source LLM integration (Ollama / llama.cpp / HF) | |
 | 6 | LoRA / QLoRA fine-tuning | |
 | 7 | RAG v1: chunking, embeddings, vector search | |
@@ -77,6 +77,15 @@ forgelm train-neural-bigram --corpus data/tinyshakespeare.txt --steps 3000 --lr 
 forgelm train-minigpt --corpus data/tinyshakespeare.txt --steps 2000 --device cpu
 forgelm generate --model checkpoints/minigpt.pt --prompt "ROMEO:" --max-tokens 250 --seed 42 --temperature 0.8
 ```
+
+### Dashboard
+
+```powershell
+forgelm serve            # then open http://127.0.0.1:8000/ui
+```
+
+Three panels: **Tokenizer**, **Generate** (any model in `checkpoints/`) and **Attention** (a
+heatmap per block and head of a trained MiniGPT). Train a model first with the commands above.
 
 ## Development
 

@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ForgeLM dashboard</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #667085; --line: #d9dde5;
+    --accent: #2f5bea; --accent-text: #ffffff; --chip: #eef1f7; --error: #b42318;
+    --heat: 47, 91, 234; /* rgb of the heatmap colour; alpha = attention weight */
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c; --card: #1b202b; --text: #e6e9f0; --muted: #98a2b3; --line: #2e3544;
+      --accent: #6c8cff; --accent-text: #0e1220; --chip: #262d3b; --error: #ff8a80;
+      --heat: 108, 140, 255;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header, main { max-width: 960px; margin: 0 auto; padding: 0 16px; }
+  header { padding-top: 24px; padding-bottom: 8px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 1.5rem; }
+  h2 { margin: 0 0 4px; font-size: 1.1rem; }
+  .muted { color: var(--muted); font-size: 0.9rem; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+            padding: 16px; margin: 16px 0; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin: 12px 0; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--muted); }
+  input, select, textarea, button { font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  textarea { width: 100%; min-height: 60px; resize: vertical; font-family: ui-monospace, monospace; }
+  input[type=number] { width: 90px; }
+  button { background: var(--accent); color: var(--accent-text); border-color: var(--accent);
+           cursor: pointer; font-weight: 600; padding: 7px 14px; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  pre.out { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line);
+            border-radius: 6px; padding: 10px; min-height: 40px; font-family: ui-monospace, monospace; }
+  .error { color: var(--error); font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+  .chip { background: var(--chip); border-radius: 6px; padding: 2px 6px; font-family: ui-monospace, monospace;
+          text-align: center; font-size: 0.85rem; }
+  .chip small { display: block; color: var(--muted); font-size: 0.7rem; }
+  .scroll { overflow-x: auto; }
+  table.heat { border-collapse: collapse; margin: 8px 0; font-family: ui-monospace, monospace; font-size: 0.75rem; }
+  table.heat th { font-weight: 600; color: var(--muted); padding: 0 4px; white-space: pre; }
+  table.heat th.rowhead { text-align: right; }
+  table.heat td { width: 22px; height: 22px; padding: 0; border: 1px solid var(--bg); }
+  table.heat td.future { background: repeating-linear-gradient(45deg, transparent 0 3px, var(--line) 3px 4px); }
+  .axis { font-size: 0.8rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ForgeLM</h1>
+  <span class="muted" id="version">connecting...</span>
+</header>
+<main>
+
+<section id="tokenizer-panel">
+  <h2>Tokenizer</h2>
+  <div class="muted">How text is cut into pieces and numbered.</div>
+  <textarea id="tok-text">hello world</textarea>
+  <div class="row">
+    <label>Tokenizer
+      <select id="tok-kind"><option value="char">char</option><option value="bpe">bpe</option></select>
+    </label>
+    <label>BPE merges <input type="number" id="tok-merges" value="50" min="0" max="1000"></label>
+    <button id="tok-go">Tokenize</button>
+  </div>
+  <div id="tok-error" class="error"></div>
+  <div class="chips" id="tok-chips"></div>
+  <div class="muted" id="tok-stats"></div>
+</section>
+
+<section id="generate-panel">
+  <h2>Generate</h2>
+  <div class="muted">Continue a prompt with a trained model. Train one with <code>forgelm train-minigpt</code>.</div>
+  <div class="row">
+    <label>Model <select id="gen-model"></select></label>
+    <label>Max tokens <input type="number" id="gen-max" value="200" min="0" max="1000"></label>
+    <label>Temperature <input type="number" id="gen-temp" value="0.8" min="0" max="5" step="0.1"></label>
+    <label>Seed <input type="number" id="gen-seed" placeholder="random"></label>
+  </div>
+  <textarea id="gen-prompt">ROMEO:</textarea>
+  <div class="row"><button id="gen-go">Generate</button></div>
+  <div id="gen-error" class="error"></div>
+  <pre class="out" id="gen-out"></pre>
+</section>
+
+<section id="attention-panel">
+  <h2>Attention</h2>
+  <div class="muted">
+    Row = the token that is looking. Column = the token it looks at. Darker = more attention.
+    The hatched upper triangle is the causal mask: no looking at the future.
+  </div>
+  <div class="row">
+    <label>MiniGPT model <select id="att-model"></select></label>
+    <label>Block <select id="att-block"></select></label>
+    <label>Head <select id="att-head"></select></label>
+  </div>
+  <textarea id="att-text">ROMEO: But soft</textarea>
+  <div class="row"><button id="att-go">Show attention</button></div>
+  <div id="att-error" class="error"></div>
+  <div class="axis" id="att-caption"></div>
+  <div class="scroll"><table class="heat" id="att-table"></table></div>
+</section>
+
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+
+// Talk to the API. Errors become a message string, never an exception in the UI.
+async function api(path, body) {
+  const options = body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  };
+  const response = await fetch(path, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    let detail = data.detail;
+    if (Array.isArray(detail)) detail = detail.map((d) => `${d.loc.slice(1).join(".")}: ${d.msg}`).join("; ");
+    throw new Error(detail || `HTTP ${response.status}`);
+  }
+  return data;
+}
+
+// Make invisible characters visible. Everything below uses textContent, never innerHTML,
+// so text typed by a user can never turn into markup.
+const show = (token) => token.replace(/ /g, "␣").replace(/\n/g, "↵").replace(/\t/g, "⇥");
+
+// Run `work` with the button disabled and any error shown in `errorBox`.
+async function run(button, errorBox, work) {
+  errorBox.textContent = "";
+  button.disabled = true;
+  try { await work(); } catch (e) { errorBox.textContent = e.message; } finally { button.disabled = false; }
+}
+
+// ---- Tokenizer ----
+$("tok-go").onclick = () => run($("tok-go"), $("tok-error"), async () => {
+  const r = await api("/tokenize", {
+    text: $("tok-text").value, tokenizer: $("tok-kind").value, num_merges: Number($("tok-merges").value),
+  });
+  const chips = $("tok-chips");
+  chips.replaceChildren();
+  r.tokens.forEach((token, i) => {
+    const chip = document.createElement("div");
+    chip.className = "chip";
+    chip.textContent = show(token);
+    const id = document.createElement("small");
+    id.textContent = r.ids[i];
+    chip.append(id);
+    chips.append(chip);
+  });
+  $("tok-stats").textContent =
+    `${r.num_chars} chars -> ${r.num_tokens} tokens | vocab ${r.vocab_size} | ` +
+    `${r.chars_per_token.toFixed(2)} chars/token | round-trip ${r.roundtrip_ok ? "OK" : "FAILED"}`;
+});
+
+// ---- Generate ----
+$("gen-go").onclick = () => run($("gen-go"), $("gen-error"), async () => {
+  const seed = $("gen-seed").value;
+  const r = await api("/generate", {
+    model: $("gen-model").value, prompt: $("gen-prompt").value,
+    max_tokens: Number($("gen-max").value), temperature: Number($("gen-temp").value),
+    seed: seed === "" ? null : Number(seed),
+  });
+  $("gen-out").textContent = r.text;
+});
+
+// ---- Attention ----
+let lastAttention = null;
+
+function drawAttention() {
+  const table = $("att-table");
+  table.replaceChildren();
+  if (!lastAttention) return;
+  const block = Number($("att-block").value), head = Number($("att-head").value);
+  const grid = lastAttention.weights[block][head];
+  const tokens = lastAttention.tokens.map(show);
+
+  const top = table.insertRow();
+  top.append(document.createElement("th"));
+  tokens.forEach((token) => { const th = document.createElement("th"); th.textContent = token; top.append(th); });
+
+  grid.forEach((row, t) => {
+    const tr = table.insertRow();
+    const rowHead = document.createElement("th");
+    rowHead.className = "rowhead";
+    rowHead.textContent = tokens[t];
+    tr.append(rowHead);
+    row.forEach((weight, s) => {
+      const td = tr.insertCell();
+      if (s > t) { td.className = "future"; td.title = "masked: the future"; return; }
+      td.style.background = `rgba(var(--heat), ${weight})`;
+      td.title = `${tokens[t]} looks at ${tokens[s]}: ${weight.toFixed(3)}`;
+    });
+  });
+  $("att-caption").textContent =
+    `block ${block}, head ${head} | every row sums to 1 (hover a cell for its weight)`;
+}
+
+$("att-go").onclick = () => run($("att-go"), $("att-error"), async () => {
+  lastAttention = await api("/attention", { model: $("att-model").value, text: $("att-text").value });
+  const blocks = lastAttention.weights.length, heads = lastAttention.weights[0].length;
+  const fill = (select, n) => {
+    const keep = Math.min(Number(select.value) || 0, n - 1);
+    select.replaceChildren(...Array.from({ length: n }, (_, i) => new Option(String(i), String(i))));
+    select.value = String(keep);
+  };
+  fill($("att-block"), blocks);
+  fill($("att-head"), heads);
+  drawAttention();
+});
+$("att-block").onchange = drawAttention;
+$("att-head").onchange = drawAttention;
+
+// ---- Start-up: version and model lists ----
+async function init() {
+  try {
+    const health = await api("/health");
+    $("version").textContent = `v${health.version}`;
+    const models = await api("/models");
+    const fillModels = (select, list) => {
+      select.replaceChildren(...list.map((m) => new Option(`${m.name} (${m.kind})`, m.name)));
+      if (list.length === 0) select.append(new Option("no model found: train one first", ""));
+    };
+    fillModels($("gen-model"), models);
+    fillModels($("att-model"), models.filter((m) => m.kind === "minigpt"));
+  } catch (e) {
+    $("version").textContent = `cannot reach the API: ${e.message}`;
+  }
+}
+init();
+</script>
+</body>
+</html>

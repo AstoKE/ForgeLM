@@ -46,12 +46,17 @@ understand, debug and extend everything in this repo.
   The 3d quiz is still unanswered (see `docs/learning-log.md`). Known limits, left on purpose:
   the batch is a Python loop over single windows (no `(B, T)` dimension), so the GPU is *slower*
   than the CPU (22 s vs 12 s per 100 steps); no best-val checkpoint; Adam state is not saved.
-- ⏳ **Next: Sprint 4, training dashboard.** Before it, decide whether to add the `(B, T)` batch
-  dimension (touches `attention.py`, `block.py`, `minigpt.py`; needs approval) and whether to run
-  the 20,000-step overfitting experiment (~40 min CPU). Start with a concept briefing, in simple
-  language.
-- 💡 **Backlog: a web UI** served by FastAPI at `/ui` (tokenizer, generate and attention
-  heatmap panels; needs `POST /generate` and `POST /attention`). Agreed to do it later.
+- 🔶 **Sprint 4a: Inference dashboard** (done, 4b pending). `forgelm/inference/local.py`
+  (`ModelStore` cache, `generate_text`, `attention_maps`), endpoints `GET /models`,
+  `POST /generate`, `POST /attention`, `GET /ui`, and `forgelm/ui/index.html` (vanilla JS,
+  attention heatmap, no framework; [ADR 0006](docs/decisions/0006-dashboard-ui.md)). 240 tests;
+  the page was also driven in headless Chrome. Models are looked up by file name only (path
+  traversal is rejected). The 4a quiz is not asked yet.
+- ⏳ **Next: Sprint 4b, live training in the dashboard.** `POST /train` starts a background
+  thread and returns a job id, the page polls `GET /train/{id}` and draws the loss curve on a
+  `<canvas>`; needs a progress callback in `train_minigpt`. Start with a concept briefing, in
+  simple language. Optional later: the `(B, T)` batch dimension (needs approval) and the
+  20,000-step overfitting experiment.
 
 Environment: torch 2.14.0+cu130 in `.venv` (CUDA 13.0 driver, RTX 4060 8 GB). Install with
 `pip install torch --index-url https://download.pytorch.org/whl/cu130` then `pip install -e ".[dev,ml]"`.
@@ -113,5 +118,5 @@ python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\Act
 python -m pip install -e ".[dev]"
 pytest                          # tests
 ruff check . && ruff format .   # lint + format
-forgelm serve --reload          # http://127.0.0.1:8000/health, /docs
+forgelm serve --reload          # http://127.0.0.1:8000/health, /docs, /ui
 ```

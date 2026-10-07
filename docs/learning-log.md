@@ -705,3 +705,66 @@ tensors.
 
 ### Open questions
 - _(fill in)_
+
+
+---
+
+## Sprint 4a: Inference dashboard (2026-10-07)
+
+### Concepts
+- A dashboard is a window onto the model: what it generates, and what happens inside it
+- **Thin adapter again**: `api.py` only turns HTTP into calls. `forgelm/inference/` holds the
+  logic, raises three error types (invalid request, not found, torch missing), and the API maps
+  them to 422 / 404 / 503
+- **Load once, cache**: reading and rebuilding the model on every request is wasteful. The cache
+  key includes the file's modification time, so a retrained checkpoint is reloaded
+- **Path traversal**: if the request carried a file path, `"../pyproject.toml"` could read files
+  outside `checkpoints/`. The API only takes a *file name*, and rejects anything with a folder,
+  a leading dot or an unknown extension
+- **Attention heatmap**: one cell per (looking token, looked-at token), colour = weight. The
+  causal mask is the empty upper triangle. 4 blocks x 4 heads = 16 different maps
+- Static HTML + vanilla JS, no framework or build step ([ADR 0006](decisions/0006-dashboard-ui.md)).
+  `textContent` instead of `innerHTML`, so typed text can never become markup
+- FastAPI dependencies (`Depends`) let tests swap the model folder for a temporary one
+
+### What we built
+- `forgelm/inference/local.py`: `ModelStore`, `generate_text`, `attention_maps`
+- `GET /models`, `POST /generate`, `POST /attention`, `GET /ui`, with input limits like `/tokenize`
+- `forgelm/ui/index.html`: Tokenizer, Generate and Attention panels
+- 37 new tests (240 total): store, cache and reload, path traversal, corrupt files, torch missing,
+  seeds, attention rows summing to 1 with a zero future, every API status code
+- Checked in a real browser by driving headless Chrome: 15 tokens gave a 15x15 grid with 105
+  masked cells (15 x 14 / 2), and an empty text showed the API's error
+
+### Experiment: what a trained MiniGPT attends to ("ROMEO:", block 3, head 0)
+```
+R  1.00
+O  0.04 0.96
+M  0.13 0.36 0.52
+E  0.00 0.01 0.98 0.01          <- E looks 98% at M
+O  0.00 0.00 0.05 0.01 0.94     <- O looks 94% at itself
+:  0.06 0.06 0.51 0.03 0.04 0.30
+```
+Rows sum to 1, the future is 0 (the mask), and unlike 3b the pattern is not random: heads
+specialise. In block 0, head 0 looks mostly at the token itself (the diagonal).
+*Heatmap caveat:* a bright cell shows where information is read from, not why. It is a
+hint about the model, not an explanation.
+
+### Mistakes / surprises
+- Ruff B008 flagged `= Depends(get_store)` in a default argument. FastAPI's current idiom is
+  `Annotated[ModelStore, Depends(get_store)]`
+- The Generate panel's first model was `bigram.json`, only because the list is sorted by name.
+  My first reading of the screenshot was "the MiniGPT output looks bad": it was the bigram
+
+### Quiz (not asked yet, to do next session)
+1. Why can the heatmap's upper triangle never have colour, and can training change that?
+2. Why does the API take a model *name* and not a path?
+3. Why is the model cached, and why does the cache key include the file's modification time?
+4. A heatmap shows head 0 of block 3 looking 98% at "M". Does that prove the model "uses M" to
+   predict the next letter?
+
+### Lessons
+- _(fill in, in your own words)_
+
+### Open questions
+- _(fill in)_

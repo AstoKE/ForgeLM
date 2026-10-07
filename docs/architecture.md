@@ -1,6 +1,6 @@
 # ForgeLM architecture
 
-_Last updated: Sprint 3d_
+_Last updated: Sprint 4a_
 
 ## Principle: thin adapters around core logic
 
@@ -24,7 +24,9 @@ _Last updated: Sprint 3d_
 | Module | Role |
 |---|---|
 | `forgelm/__init__.py` | Package marker and `__version__` (read from installed metadata) |
-| `forgelm/api.py` | FastAPI `app`; `GET /health`, `POST /tokenize` |
+| `forgelm/api.py` | FastAPI `app`; `GET /health`, `POST /tokenize`, `GET /models`, `POST /generate`, `POST /attention`, `GET /ui`. Maps the three inference errors to 422 / 404 / 503 |
+| `forgelm/inference/local.py` | `ModelStore` (a checkpoint folder with a cache; names only, no paths), `generate_text`, `attention_maps`. Knows nothing about HTTP; torch is imported lazily ([ADR 0006](decisions/0006-dashboard-ui.md)) |
+| `forgelm/ui/index.html` | The dashboard: Tokenizer, Generate and Attention panels, vanilla JS, no build step |
 | `forgelm/cli.py` | `forgelm` command; `--version`, `serve`, `tokenize`, `train-bigram`, `train-neural-bigram`, `train-minigpt`, `generate` (`.json` bigram or `.pt` MiniGPT) |
 | `forgelm/tokenizer/base.py` | `Tokenizer` protocol: `encode`, `decode`, `tokens`, `vocab_size`, `unk_id` |
 | `forgelm/tokenizer/char.py` | `CharTokenizer` (vocab from corpus, `<unk>` = id 0) |
@@ -62,6 +64,12 @@ Training and generation for MiniGPT:
 train-minigpt: corpus -> encode_and_split() -> train_minigpt() (windows -> loss -> Adam)
                -> save_minigpt() -> checkpoints/minigpt.pt  (weights + config + tokenizer)
 generate:      .pt -> load_minigpt() -> encode(prompt) -> model.generate() -> decode -> print
+```
+
+Dashboard (`forgelm serve`, then http://127.0.0.1:8000/ui):
+```
+browser --fetch--> api.py --> inference.ModelStore (cache) --> bigram / MiniGPT
+   /models  /generate  /attention  /tokenize          attention_maps = model.forward(ids)[1]
 ```
 
 Torch boundary: nothing under `forgelm/` imports torch at module load except

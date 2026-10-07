@@ -33,6 +33,9 @@ forgelm = "forgelm.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+forgelm = ["ui/*.html"]  # the dashboard page ships inside the package
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
