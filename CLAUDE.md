@@ -62,11 +62,30 @@ understand, debug and extend everything in this repo.
   Chrome, running and finished. Corpus and output are file names inside one folder, never paths;
   every hyperparameter is capped (`MAX_STEPS = 5000`).
   The 4a and 4b quizzes are still unanswered (see `docs/learning-log.md`).
+- ✅ **Sprint 4c: the `(B, T)` batch dimension and best-val weights.** The whole batch goes
+  through the model in one call (`attention.check_shape` accepts `(T, C)` and `(B, T, C)`), and
+  `keep_best` restores the lowest-val weights. 4.8M-param model on the GPU: 1.343 → 0.066 s/step
+  (20x); the GPU is now faster than the CPU instead of slower. One line was really broken
+  (`q @ k.T`), the rest were our own shape guards.
+- ✅ **Sprint 4d: teaching skills, and grading them** ([ADR 0008](docs/decisions/0008-skills-graded-by-exams.md)).
+  `forgelm/data/` (`synthetic.py` addition problems with a hidden exam, `pad` and `reverse`;
+  `code.py` Python from this machine, 6,657 distinct characters cleaned to 97; `mix.py` stories +
+  code + sums per document under tag lines), `forgelm/eval/` (`math_accuracy` per group,
+  `parsing_prefix_fraction` with a ceiling and a floor), CLI `make-math-data`, `eval-math`,
+  `collect-code`, `eval-code`, `make-mix`, `train-minigpt --resume --warmup-steps
+  --min-lr-fraction`, `--device`, and `on_best` (the best model is written to disk as training
+  runs). 473 tests. Results: a 0.8M model scores 84% on plain sums, 99% padded, **100%** padded
+  and reversed after a long plateau; a **25.4M-param** MiniGPT trained on the 64 MB mix
+  (val 0.718, about 40 min of GPU) scores **99.9%** on hidden sums and 0.91 between the floor and
+  the ceiling on Python parsing. It writes valid-looking but meaningless code and loops sometimes.
+  Interference between the skills and three-digit sums are not measured. The 4a, 4b and 4d quizzes
+  are unanswered. **Do not run a job longer than ~29 minutes as a tracked background task** (it
+  is killed); cut it into pieces with `--resume`.
 - ⏳ **Next: Sprint 5, an open-source LLM** (Ollama / llama.cpp / HF) behind the same
   `/generate` endpoint, so the dashboard can talk to a real assistant instead of MiniGPT. Start
-  with a concept briefing, in simple language. Optional leftovers: the `(B, T)` batch dimension
-  (needs approval; it is why the GPU is slower than the CPU), the 20,000-step overfitting
-  experiment, a best-val checkpoint, and cancelling a running job.
+  with a concept briefing, in simple language. Optional leftovers: a specialised-vs-mixed
+  comparison (interference), `compile()` instead of `ast.parse` in the Python exam, a story exam,
+  BPE wired into MiniGPT (4x the context for the same token count), and cancelling a running job.
 
 Environment: torch 2.14.0+cu130 in `.venv` (CUDA 13.0 driver, RTX 4060 8 GB). Install with
 `pip install torch --index-url https://download.pytorch.org/whl/cu130` then `pip install -e ".[dev,ml]"`.
