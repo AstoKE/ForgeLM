@@ -29,7 +29,7 @@ Requires the optional `ml` extra (torch).
 
 import torch
 
-from forgelm.models.attention import MultiHeadAttention
+from forgelm.models.attention import MultiHeadAttention, check_shape
 
 
 class FeedForward:
@@ -78,9 +78,8 @@ class FeedForward:
         return [self.W1, self.b1, self.W2, self.b2]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: (T, C) -> (T, C). Every row is processed independently."""
-        if x.ndim != 2 or x.shape[1] != self.embed_dim:
-            raise ValueError(f"expected x of shape (T, {self.embed_dim}), got {tuple(x.shape)}")
+        """x: (T, C) or (B, T, C) -> the same shape. Every row is processed independently."""
+        check_shape(x, self.embed_dim)
         hidden = torch.relu(x @ self.W1 + self.b1)  # negatives become 0: "this one did not fire"
         return hidden @ self.W2 + self.b2
 
@@ -119,9 +118,8 @@ class LayerNorm:
         return [self.gamma, self.beta]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: (T, C) -> (T, C)."""
-        if x.ndim != 2 or x.shape[1] != self.embed_dim:
-            raise ValueError(f"expected x of shape (T, {self.embed_dim}), got {tuple(x.shape)}")
+        """x: (T, C) or (B, T, C) -> the same shape. mean/var are over the last axis only."""
+        check_shape(x, self.embed_dim)
         mean = x.mean(dim=-1, keepdim=True)
         # unbiased=False divides by C instead of C-1, which is what nn.LayerNorm does.
         var = x.var(dim=-1, keepdim=True, unbiased=False)
@@ -179,7 +177,7 @@ class TransformerBlock:
         ]
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """x: (T, C) -> (output (T, C), attention weights (num_heads, T, T))."""
+        """x: (T, C) or (B, T, C) -> (the same shape, weights (..., num_heads, T, T))."""
         attended, weights = self.attention.forward(self.ln1.forward(x))
         x = x + attended
         return x + self.feedforward.forward(self.ln2.forward(x)), weights

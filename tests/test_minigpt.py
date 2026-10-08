@@ -168,10 +168,11 @@ def test_blocks_do_not_share_their_seeds():
 def test_forward_rejects_bad_input_and_loss_rejects_mismatched_targets():
     model = small_model()
 
-    with pytest.raises(ValueError, match=r"\(T,\)"):
-        model.forward(torch.zeros(2, 3, dtype=torch.long))
+    # (B, T) is valid now; rank 3 and an empty sequence are not.
+    with pytest.raises(ValueError, match=r"\(B, T\)"):
+        model.forward(torch.zeros(2, 3, 4, dtype=torch.long))
 
-    with pytest.raises(ValueError, match=r"\(T,\)"):
+    with pytest.raises(ValueError, match=r"\(B, T\)"):
         model.forward(torch.tensor([], dtype=torch.long))
 
     with pytest.raises(ValueError, match="differ"):
@@ -313,3 +314,75 @@ def test_load_does_not_run_code_hidden_in_the_file(tmp_path):
 
     with pytest.raises(ValueError, match="not a MiniGPT checkpoint"):
         load_minigpt(path)
+
+
+# --- the (B, T) batch dimension -----------------------------------------------------------
+
+
+def test_forward_accepts_a_batch_and_keeps_the_shapes():
+    model = small_model()
+    ids = torch.randint(0, VOCAB, (3, 5), generator=torch.Generator().manual_seed(20))
+
+    logits, weights = model.forward(ids)
+
+    assert logits.shape == (3, 5, VOCAB)
+    assert len(weights) == 2  # still one entry per block
+    assert weights[0].shape == (3, 4, 5, 5)  # (B, heads, T, T): the head axis stays next to T
+
+
+def test_an_unbatched_call_is_unchanged():
+    # The whole 2-D path must behave exactly as before, which is what 284 tests rely on.
+    model = small_model()
+    ids = torch.tensor([3, 9, 20, 41, 7])
+
+    flat_logits, flat_weights = model.forward(ids)
+    batched_logits, batched_weights = model.forward(ids.unsqueeze(0))
+
+    assert flat_logits.shape == (5, VOCAB)
+    assert flat_weights[0].shape == (4, 5, 5)
+    assert torch.allclose(batched_logits[0], flat_logits, atol=1e-6)
+    assert torch.allclose(batched_weights[0][0], flat_weights[0], atol=1e-6)
+
+
+def test_windows_in_a_batch_do_not_leak_into_each_other():
+    # Attention mixes positions; it must never mix *examples*.
+    model = small_model()
+    ids = torch.randint(0, VOCAB, (3, 6), generator=torch.Generator().manual_seed(21))
+    changed = ids.clone()
+    changed[0] = torch.randint(0, VOCAB, (6,), generator=torch.Generator().manual_seed(22))
+
+    before, _ = model.forward(ids)
+    after, _ = model.forward(changed)
+
+    assert torch.allclose(after[1:], before[1:])
+    assert not torch.allclose(after[0], before[0])
+
+
+def test_a_batch_still_cannot_see_the_future():
+    model = small_model()
+    ids = torch.randint(0, VOCAB, (2, 6), generator=torch.Generator().manual_seed(23))
+    changed = ids.clone()
+    changed[:, -1] = (changed[:, -1] + 1) % VOCAB
+
+    before, _ = model.forward(ids)
+    after, _ = model.forward(changed)
+
+    assert torch.allclose(after[:, :-1], before[:, :-1])
+
+
+def test_a_batch_longer_than_the_context_is_still_refused():
+    model = small_model(block_size=4)
+
+    with pytest.raises(ValueError, match="longer than block_size"):
+        model.forward(torch.zeros(2, 5, dtype=torch.long))
+
+
+def test_gradients_reach_everything_from_a_batched_loss():
+    model = small_model()
+    ids = torch.randint(0, VOCAB, (4, 8), generator=torch.Generator().manual_seed(24))
+
+    model.loss(ids[:, :-1], ids[:, 1:]).backward()
+
+    for parameter in model.parameters():
+        assert parameter.grad is not None
+        assert not torch.allclose(parameter.grad, torch.zeros_like(parameter.grad))

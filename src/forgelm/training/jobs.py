@@ -167,7 +167,12 @@ class TrainingJobStore:
             with self._lock:
                 job.status = "done"
                 job.seconds = history.seconds
-                job.val_loss = history.val_loss[-1]
+                # The checkpoint on disk holds the best-val weights, so report that loss.
+                job.val_loss = (
+                    history.best_val_loss
+                    if history.best_val_loss is not None
+                    else history.val_loss[-1]
+                )
 
         thread = threading.Thread(target=run, name=f"train-{job.id}", daemon=True)
         with self._lock:

@@ -257,3 +257,68 @@ def test_a_callback_that_raises_stops_the_training():
             on_progress=boom,
             **TINY,
         )
+
+
+# --- keeping the best-val weights (before sprint 5) ---------------------------------------
+
+
+def random_ids(n=400, seed=0):
+    """Ids with no structure to learn, so val loss wanders instead of falling."""
+    return torch.randint(0, 40, (n,), generator=torch.Generator().manual_seed(seed)).tolist()
+
+
+def test_the_best_val_loss_and_its_step_are_recorded():
+    ids = random_ids()
+
+    _, history = train_minigpt(
+        ids, ids, vocab_size=40, steps=20, eval_every=4, batch_size=2, **TINY
+    )
+
+    assert history.best_val_loss == min(history.val_loss)
+    assert history.best_step == history.steps[history.val_loss.index(min(history.val_loss))]
+
+
+def test_the_model_returned_is_the_best_one_not_the_last_one():
+    # On random data the last evaluation is almost never the best, so the two runs
+    # must end up with different weights.
+    ids = random_ids()
+    common = dict(steps=20, eval_every=4, batch_size=2, seed=1, **TINY)
+
+    best_model, history = train_minigpt(ids, ids, vocab_size=40, keep_best=True, **common)
+    last_model, _ = train_minigpt(ids, ids, vocab_size=40, keep_best=False, **common)
+
+    identical = all(
+        torch.equal(a, b)
+        for a, b in zip(best_model.parameters(), last_model.parameters(), strict=True)
+    )
+    # They may only agree if the best evaluation happened to be the final one.
+    assert identical == (history.best_step == history.steps[-1])
+
+
+def test_keep_best_off_records_nothing():
+    ids = random_ids()
+
+    _, history = train_minigpt(
+        ids, ids, vocab_size=40, steps=8, eval_every=4, batch_size=2, keep_best=False, **TINY
+    )
+
+    assert history.best_val_loss is None
+    assert history.best_step is None
+
+
+# --- the (B, T) batch dimension -----------------------------------------------------------
+
+
+def test_a_batch_loss_equals_the_mean_of_its_windows():
+    # The batched call must compute exactly what the old per-window loop averaged.
+    model = MiniGPT(
+        vocab_size=40, block_size=8, **{k: v for k, v in TINY.items() if k != "block_size"}
+    )
+    gen = torch.Generator().manual_seed(2)
+    ids = torch.randint(0, 40, (200,), generator=gen)
+    x, y = get_batch(ids, 8, 4, gen)
+
+    batched = model.loss(x, y)
+    one_by_one = sum(model.loss(x[i], y[i]) for i in range(len(x))) / len(x)
+
+    assert batched.item() == pytest.approx(one_by_one.item(), abs=1e-5)

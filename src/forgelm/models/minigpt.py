@@ -109,16 +109,25 @@ class MiniGPT:
         return sum(p.numel() for p in self.parameters())
 
     def forward(self, ids: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
-        """ids: (T,) token ids -> (logits (T, vocab_size), attention weights per block)."""
-        if ids.ndim != 1 or len(ids) == 0:
-            raise ValueError(f"expected ids of shape (T,) with T >= 1, got {tuple(ids.shape)}")
-        if len(ids) > self.block_size:
+        """ids: (T,) or (B, T) -> (logits (..., T, vocab_size), attention weights per block).
+
+        A batch costs almost nothing extra on a GPU: the same kernels run once over B
+        windows instead of B times over one. Everything below indexes the last axis, so
+        the batch axis just rides along.
+        """
+        if ids.ndim not in (1, 2) or ids.shape[-1] == 0:
             raise ValueError(
-                f"sequence of {len(ids)} tokens is longer than block_size {self.block_size}: "
+                f"expected ids of shape (T,) or (B, T) with T >= 1, got {tuple(ids.shape)}"
+            )
+        length = ids.shape[-1]
+        if length > self.block_size:
+            raise ValueError(
+                f"sequence of {length} tokens is longer than block_size {self.block_size}: "
                 "there is no seat number that high in the position table"
             )
         # Row lookup, exactly like NeuralBigram's W[prev]: cheaper than one_hot @ table.
-        x = self.token_embedding[ids] + self.position_embedding[: len(ids)]
+        # (B, T) ids give (B, T, C); the (T, C) position table broadcasts over the batch.
+        x = self.token_embedding[ids] + self.position_embedding[:length]
         weights = []
         for block in self.blocks:
             x, block_weights = block.forward(x)
@@ -126,11 +135,15 @@ class MiniGPT:
         return self.ln_final.forward(x) @ self.head, weights
 
     def loss(self, ids: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        """Mean cross-entropy over the sequence, reusing 2b's hand-written version."""
+        """Mean cross-entropy over every position, reusing 2b's hand-written version.
+
+        `cross_entropy` wants (N, V) and (N,), so a batch is flattened: B windows of T
+        positions are simply B * T predictions, all weighted the same.
+        """
         if ids.shape != targets.shape:
             raise ValueError(f"ids {tuple(ids.shape)} and targets {tuple(targets.shape)} differ")
         logits, _ = self.forward(ids)
-        return cross_entropy(logits, targets)
+        return cross_entropy(logits.reshape(-1, self.vocab_size), targets.reshape(-1))
 
     @torch.no_grad()
     def generate(

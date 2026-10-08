@@ -84,6 +84,9 @@ class TrainHistory:
     train_loss: list[float] = field(default_factory=list)
     val_loss: list[float] = field(default_factory=list)
     seconds: float = 0.0
+    # Filled in by trainers that keep the best-val weights (MiniGPT); None otherwise.
+    best_step: int | None = None
+    best_val_loss: float | None = None
 
 
 def _pairs(ids: list[int], device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:

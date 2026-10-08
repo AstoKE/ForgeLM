@@ -223,9 +223,12 @@ def main(argv: list[str] | None = None) -> int:
             f"device {device_name(history.device)} | vocab {model.vocab_size}"
             f" | params {model.num_parameters():,} | context {model.block_size} tokens"
         )
+        # The saved model is the best-val one, so that is the number to report first.
+        kept = history.best_val_loss if history.best_val_loss is not None else history.val_loss[-1]
         print(
-            f"trained in {history.seconds:.1f}s | final val loss {history.val_loss[-1]:.3f}"
-            f" (perplexity {math.exp(history.val_loss[-1]):.1f})"
+            f"trained in {history.seconds:.1f}s | kept val loss {kept:.3f}"
+            f" (perplexity {math.exp(kept):.1f}) from step {history.best_step}"
+            f" | last {history.val_loss[-1]:.3f}"
             f" | uniform baseline loss {math.log(model.vocab_size):.3f}"
         )
         save_minigpt(args.out, model, tokenizer)

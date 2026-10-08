@@ -180,7 +180,9 @@ def test_head_rejects_wrong_input_shape():
     with pytest.raises(ValueError, match="expected x of shape"):
         head.forward(torch.randn(5, 7))  # wrong number of channels
     with pytest.raises(ValueError, match="expected x of shape"):
-        head.forward(torch.randn(2, 5, 8))  # a batch dimension we don't support (yet)
+        head.forward(torch.randn(2, 5, 7))  # a batch, but still the wrong channel count
+    with pytest.raises(ValueError, match="expected x of shape"):
+        head.forward(torch.randn(2, 3, 5, 8))  # rank 4: nobody meant to pass this
 
 
 def test_head_rejects_invalid_sizes():
@@ -260,3 +262,52 @@ def test_multi_head_rejects_an_uneven_split():
 
     with pytest.raises(ValueError, match="num_heads"):
         MultiHeadAttention(embed_dim=8, num_heads=0)
+
+
+# --- the (B, T, C) batch dimension ---------------------------------------------------------
+
+
+def test_heads_and_multi_head_carry_a_batch_through():
+    x = torch.randn(3, 5, 8, generator=torch.Generator().manual_seed(30))
+
+    head_out, head_weights = SelfAttentionHead(embed_dim=8, head_size=4).forward(x)
+    mha_out, mha_weights = MultiHeadAttention(embed_dim=8, num_heads=4).forward(x)
+
+    assert head_out.shape == (3, 5, 4)
+    assert head_weights.shape == (3, 5, 5)
+    assert mha_out.shape == (3, 5, 8)
+    assert mha_weights.shape == (3, 4, 5, 5)  # (B, heads, T, T)
+
+
+def test_a_batch_of_one_equals_the_unbatched_call():
+    x = torch.randn(5, 8, generator=torch.Generator().manual_seed(31))
+    mha = MultiHeadAttention(embed_dim=8, num_heads=4, seed=5)
+
+    flat, flat_weights = mha.forward(x)
+    batched, batched_weights = mha.forward(x.unsqueeze(0))
+
+    assert torch.allclose(batched[0], flat, atol=1e-6)
+    assert torch.allclose(batched_weights[0], flat_weights, atol=1e-6)
+
+
+def test_examples_in_a_batch_are_independent():
+    mha = MultiHeadAttention(embed_dim=8, num_heads=4)
+    x = torch.randn(3, 5, 8, generator=torch.Generator().manual_seed(32))
+    changed = x.clone()
+    changed[0] += 100
+
+    before, _ = mha.forward(x)
+    after, _ = mha.forward(changed)
+
+    assert torch.allclose(after[1:], before[1:])  # attention mixes positions, never examples
+    assert not torch.allclose(after[0], before[0])
+
+
+def test_attend_transposes_the_last_two_axes_not_the_first():
+    # `.T` on a 3-D tensor would swap the batch axis with T and the shapes would not match.
+    q = torch.randn(2, 5, 4)
+    out, weights = attend(q, torch.randn(2, 5, 4), torch.randn(2, 5, 3))
+
+    assert out.shape == (2, 5, 3)
+    assert weights.shape == (2, 5, 5)
+    assert torch.allclose(weights.sum(dim=-1), torch.ones(2, 5), atol=1e-6)

@@ -1,6 +1,6 @@
 # ForgeLM architecture
 
-_Last updated: Sprint 4b_
+_Last updated: Sprint 4c_
 
 ## Principle: thin adapters around core logic
 
@@ -35,9 +35,9 @@ _Last updated: Sprint 4b_
 | `forgelm/tokenizer/analysis.py` | `build_tokenizer(kind, corpus, merges)` and `analyze()`, shared by the CLI and API |
 | `forgelm/models/bigram.py` | `BigramModel` (counting), `softmax`, `encode_and_split`, `train_on_text`, JSON checkpoints ([ADR 0003](decisions/0003-checkpoint-format.md)) |
 | `forgelm/models/neural_bigram.py` | PyTorch bigram: `NeuralBigram` (V×V `W`), hand-written `cross_entropy` and `sgd_step`, `train_neural_bigram`. Needs the `ml` extra; imported explicitly, never re-exported ([ADR 0004](decisions/0004-pytorch-optional-extra.md)) |
-| `forgelm/models/attention.py` | Causal mixing of past positions: `causal_mask`, causal average (loop / matmul / masked softmax), `masked_softmax_weights` (3a). `attend(q, k, v)` and `SelfAttentionHead` with learned `Wq/Wk/Wv` (3b). `MultiHeadAttention`: heads in parallel, concatenated, projected by `Wo`, returns the per-head weights (3c). Needs torch |
-| `forgelm/models/minigpt.py` | `MiniGPT`: token + position embedding, a stack of `TransformerBlock`s, a final `LayerNorm` and a `(C, V)` head. `forward(ids) -> logits`, `loss` (reuses 2b's `cross_entropy`), `generate` with temperature and context cropping (3c-3). `save_minigpt` / `load_minigpt`: weights, config and tokenizer in one `.pt` file ([ADR 0005](decisions/0005-minigpt-checkpoint.md)). Needs torch |
-| `forgelm/models/train_minigpt.py` | Training MiniGPT (3d-1): `get_batch` (random windows, `y` = `x` shifted by one), hand-written `Adam` (tested against `torch.optim.Adam`), `estimate_loss`, `train_minigpt` / `train_minigpt_on_text`, with an optional `on_progress(step, train_loss, val_loss)` callback so a caller can follow the losses while training runs (4b). The batch is a Python loop over single windows; there is no `(B, T)` dimension yet. Needs torch |
+| `forgelm/models/attention.py` | Causal mixing of past positions: `causal_mask`, causal average (loop / matmul / masked softmax), `masked_softmax_weights` (3a). `attend(q, k, v)` and `SelfAttentionHead` with learned `Wq/Wk/Wv` (3b). `MultiHeadAttention`: heads in parallel, concatenated, projected by `Wo`, returns the per-head weights (3c). `check_shape` accepts `(T, C)` and `(B, T, C)`; every layer carries a batch axis through (4c). Needs torch |
+| `forgelm/models/minigpt.py` | `MiniGPT`: token + position embedding, a stack of `TransformerBlock`s, a final `LayerNorm` and a `(C, V)` head. `forward(ids)` takes `(T,)` or `(B, T)` and returns logits, `loss` (reuses 2b's `cross_entropy`), `generate` with temperature and context cropping (3c-3). `save_minigpt` / `load_minigpt`: weights, config and tokenizer in one `.pt` file ([ADR 0005](decisions/0005-minigpt-checkpoint.md)). Needs torch |
+| `forgelm/models/train_minigpt.py` | Training MiniGPT (3d-1): `get_batch` (random windows, `y` = `x` shifted by one), hand-written `Adam` (tested against `torch.optim.Adam`), `estimate_loss`, `train_minigpt` / `train_minigpt_on_text`, with an optional `on_progress(step, train_loss, val_loss)` callback so a caller can follow the losses while training runs (4b). The whole `(B, T)` batch goes through the model in one call, and `keep_best` restores the lowest-val weights at the end (4c). Needs torch |
 | `forgelm/models/block.py` | The transformer block. `FeedForward`: per-position MLP `C -> 4C -> relu -> C`, hand-written `W1/b1/W2/b2` (3c-1). `LayerNorm`: per-position mean 0 / std 1 plus learned `gamma`/`beta`. `TransformerBlock`: pre-norm plus residuals, `x = x + attention(ln1(x))` then `x = x + feedforward(ln2(x))`, `(T, C) -> (T, C)` so blocks stack (3c-2). Needs torch |
 
 Both `tokenize` adapters follow the same path:

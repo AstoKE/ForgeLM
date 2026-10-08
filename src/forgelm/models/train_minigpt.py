@@ -110,7 +110,7 @@ def estimate_loss(
     losses = []
     for _ in range(num_batches):
         x, y = get_batch(ids, model.block_size, batch_size, generator)
-        losses += [model.loss(x[i], y[i]).item() for i in range(len(x))]
+        losses.append(model.loss(x, y).item())  # one call over the whole (B, T) batch
     return sum(losses) / len(losses)
 
 
@@ -130,12 +130,17 @@ def train_minigpt(
     device: str = "auto",
     seed: int = 0,
     on_progress: Callable[[int, float, float], None] | None = None,
+    keep_best: bool = True,
 ) -> tuple[MiniGPT, TrainHistory]:
     """Train a MiniGPT, returning the model and the loss history.
 
     `on_progress(step, train_loss, val_loss)` is called at every evaluation, so a caller
     can show the losses *while* training runs instead of after it. This module knows
     nothing about terminals or HTTP: the caller decides what to do with the numbers.
+
+    With `keep_best` (the default) the weights from the lowest val loss are remembered and
+    restored at the end, so a long run that starts overfitting still returns its best model
+    instead of its last one. The cost is one extra copy of the parameters in memory.
     """
     if steps < 1 or batch_size < 1 or eval_every < 1 or eval_batches < 1:
         raise ValueError("steps, batch_size, eval_every and eval_batches must be >= 1")
@@ -144,12 +149,17 @@ def train_minigpt(
     train = torch.tensor(train_ids, dtype=torch.long, device=dev)
     val = torch.tensor(val_ids, dtype=torch.long, device=dev)
     model = MiniGPT(vocab_size, embed_dim, num_heads, num_blocks, block_size, device=dev, seed=seed)
-    optimizer = Adam(model.parameters(), lr=lr)
+    parameters = model.parameters()
+    optimizer = Adam(parameters, lr=lr)
     # Own generators (on CPU), so window sampling is reproducible and independent of
     # any other random numbers, and evaluation does not change which windows training sees.
     train_gen = torch.Generator().manual_seed(seed)
     eval_gen = torch.Generator().manual_seed(seed + 1)
     history = TrainHistory(device=dev)
+
+    # The best weights seen so far. Val loss usually turns upwards before training ends,
+    # and the last model is then not the one worth keeping.
+    best: dict[str, object] = {"val": math.inf, "step": 0, "weights": None}
 
     def record(step: int) -> None:
         train_loss = estimate_loss(model, train, batch_size, eval_batches, eval_gen)
@@ -157,6 +167,9 @@ def train_minigpt(
         history.steps.append(step)
         history.train_loss.append(train_loss)
         history.val_loss.append(val_loss)
+        if keep_best and val_loss < best["val"]:
+            # detach(): a snapshot of the numbers, not a branch of the autograd graph.
+            best.update(val=val_loss, step=step, weights=[p.detach().clone() for p in parameters])
         if on_progress is not None:
             on_progress(step, train_loss, val_loss)
 
@@ -165,17 +178,24 @@ def train_minigpt(
         if step % eval_every == 0:
             record(step)
         x, y = get_batch(train, block_size, batch_size, train_gen)
-        total = 0.0
-        for i in range(batch_size):
-            # Dividing by B makes the summed gradients an average over the batch.
-            loss = model.loss(x[i], y[i]) / batch_size
-            loss.backward()  # adds this window's gradient to .grad
-            total += loss.item()
+        # All B windows go through every operation at once. The old version looped in
+        # Python, one window at a time, which is why the GPU used to be slower than the
+        # CPU: launching hundreds of tiny kernels cost more than running them.
+        # `loss` already averages over every position, so there is nothing to divide by.
+        loss = model.loss(x, y)
+        loss.backward()
+        total = loss.item()
         if not math.isfinite(total):
             raise FloatingPointError(f"loss became {total} at step {step}; lower --lr")
         optimizer.step()
         optimizer.zero_grad()
     record(steps)
+    if keep_best and best["weights"] is not None:
+        with torch.no_grad():  # putting the best numbers back is not a training step
+            for parameter, saved in zip(parameters, best["weights"], strict=True):
+                parameter.copy_(saved)
+        history.best_step = best["step"]
+        history.best_val_loss = best["val"]
     history.seconds = time.perf_counter() - start
     return model, history
 

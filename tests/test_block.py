@@ -233,3 +233,31 @@ def test_block_sublayers_do_not_share_a_seed():
     block = TransformerBlock(embed_dim=4, num_heads=4, hidden_dim=4, seed=0)
 
     assert not torch.allclose(block.feedforward.W1, block.attention.heads[0].Wq)
+
+
+# --- the (B, T, C) batch dimension ---------------------------------------------------------
+
+
+def test_layer_norm_and_feedforward_normalise_inside_a_batch():
+    x = torch.randn(3, 5, 8, generator=torch.Generator().manual_seed(33)) * 10
+
+    normed = LayerNorm(embed_dim=8).forward(x)
+    through = FeedForward(embed_dim=8).forward(x)
+
+    assert normed.shape == through.shape == (3, 5, 8)
+    # Still the last axis only: every (batch, position) row separately.
+    assert torch.allclose(normed.mean(dim=-1), torch.zeros(3, 5), atol=1e-6)
+    assert torch.allclose(normed.std(dim=-1, unbiased=False), torch.ones(3, 5), atol=1e-4)
+
+
+def test_a_block_carries_a_batch_and_a_batch_of_one_matches():
+    block = TransformerBlock(embed_dim=8, num_heads=4, seed=9)
+    x = torch.randn(5, 8, generator=torch.Generator().manual_seed(34))
+
+    flat, flat_weights = block.forward(x)
+    batched, batched_weights = block.forward(x.unsqueeze(0))
+
+    assert batched.shape == (1, 5, 8)
+    assert batched_weights.shape == (1, 4, 5, 5)
+    assert torch.allclose(batched[0], flat, atol=1e-6)
+    assert torch.allclose(batched_weights[0], flat_weights, atol=1e-6)

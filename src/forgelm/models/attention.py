@@ -18,6 +18,19 @@ single-head self-attention with query / key / value.
 import torch
 
 
+def check_shape(x: torch.Tensor, embed_dim: int) -> None:
+    """Accept (T, C) and (B, T, C), reject everything else.
+
+    Every layer below works on the last axis (the channels) and the one before it (the
+    positions), so a leading batch axis costs nothing. What must not slip through is a
+    wrong channel count or a rank nobody meant to pass.
+    """
+    if x.ndim not in (2, 3) or x.shape[-1] != embed_dim:
+        raise ValueError(
+            f"expected x of shape (T, {embed_dim}) or (B, T, {embed_dim}), got {tuple(x.shape)}"
+        )
+
+
 def causal_mask(T: int, device: torch.device | str | None = None) -> torch.Tensor:
     """(T, T) bool table: mask[t, s] is True when position t may look at position s.
 
@@ -81,14 +94,17 @@ def causal_average_softmax(x: torch.Tensor) -> torch.Tensor:
 
 
 def attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Scores -> weights -> mix of values. q, k: (T, H), v: (T, D).
+    """Scores -> weights -> mix of values. q, k: (..., T, H), v: (..., T, D).
 
-    Returns (output (T, D), weights (T, T)).
+    Returns (output (..., T, D), weights (..., T, T)). A leading batch dimension is
+    carried through untouched, because matmul only ever works on the last two axes.
     """
     head_size = q.shape[-1]
-    # (T, H) @ (H, T) -> (T, T). Dividing by sqrt(H) keeps the scores from growing
-    # with H: big scores make softmax "winner takes all" and the gradients tiny.
-    scores = q @ k.T / head_size**0.5
+    # (..., T, H) @ (..., H, T) -> (..., T, T). `transpose(-2, -1)`, not `.T`: on a
+    # batched tensor `.T` would swap the batch axis with T instead of the last two.
+    # Dividing by sqrt(H) keeps the scores from growing with H: big scores make
+    # softmax "winner takes all" and the gradients tiny.
+    scores = q @ k.transpose(-2, -1) / head_size**0.5
     weights = masked_softmax_weights(scores)  # the same function as in 3a
     return weights @ v, weights
 
@@ -122,9 +138,8 @@ class SelfAttentionHead:
         return [self.Wq, self.Wk, self.Wv]
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """x: (T, C) -> (output (T, head_size), weights (T, T))."""
-        if x.ndim != 2 or x.shape[1] != self.embed_dim:
-            raise ValueError(f"expected x of shape (T, {self.embed_dim}), got {tuple(x.shape)}")
+        """x: (T, C) or (B, T, C) -> (output (..., T, head_size), weights (..., T, T))."""
+        check_shape(x, self.embed_dim)
         return attend(x @ self.Wq, x @ self.Wk, x @ self.Wv)
 
 
@@ -188,11 +203,13 @@ class MultiHeadAttention:
         return [p for head in self.heads for p in head.parameters()] + [self.Wo]
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """x: (T, C) -> (output (T, C), weights (num_heads, T, T)).
+        """x: (T, C) or (B, T, C) -> (output, weights (..., num_heads, T, T)).
 
         The weights of every head are returned separately: they are what an attention
         heatmap draws, and they show that different heads really do look elsewhere.
         """
         outputs, weights = zip(*(head.forward(x) for head in self.heads), strict=True)
-        concatenated = torch.cat(outputs, dim=-1)  # num_heads x (T, H) -> (T, C)
-        return concatenated @ self.Wo, torch.stack(weights)
+        concatenated = torch.cat(outputs, dim=-1)  # num_heads x (..., T, H) -> (..., T, C)
+        # dim=-3 puts the head axis just before (T, T), so an unbatched x still gives
+        # (num_heads, T, T) and a batched one gives (B, num_heads, T, T).
+        return concatenated @ self.Wo, torch.stack(weights, dim=-3)

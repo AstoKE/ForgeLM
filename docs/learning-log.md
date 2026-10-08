@@ -887,3 +887,63 @@ Served on port 8791, rendered with `chrome --headless --dump-dom` and `--screens
 
 ### Open questions
 - _(fill in)_
+
+---
+
+## Sprint 4c: The (B, T) batch dimension and best-val weights (2026-10-08)
+
+### Concepts
+- A GPU is fast at **one big operation**, but every operation costs a fixed amount to launch.
+  Looping in Python over 16 windows means 16x as many launches for the same work
+- **Broadcasting is why the change is small**: matmul only ever touches the last two axes and
+  carries the rest along, so `(B, T, C) @ (C, H)` already worked. Measured before the change:
+  only one line was actually broken, `q @ k.T`, because on a 3-D tensor `.T` swaps the batch
+  axis with T instead of the last two. Everything else was our own shape guards being too strict
+- `torch.stack(weights, dim=-3)` keeps the head axis next to `(T, T)`, so unbatched input still
+  gives `(num_heads, T, T)` and the attention heatmap in `/ui` needed no change at all
+- Attention mixes **positions**; it must never mix **examples**. That is a separate property
+  from causality and needed its own test
+- **Keeping the best weights**: val loss usually turns upwards before a run ends, so the last
+  model is not the one worth saving. `keep_best` snapshots the parameters at the lowest val loss
+  and restores them at the end, for the price of one extra copy in memory
+
+### What we built
+- `attention.check_shape`, shared by every layer: accepts `(T, C)` and `(B, T, C)`, rejects the
+  rest. `attend` now uses `transpose(-2, -1)`
+- `MiniGPT.forward` takes `(T,)` or `(B, T)`; `loss` flattens `(B, T, V)` to `(B*T, V)`, because
+  B windows of T positions are simply B*T predictions
+- The training loop lost its `for i in range(batch_size)`: one `model.loss(x, y)` per step
+- `train_minigpt(keep_best=True)` plus `TrainHistory.best_step` / `best_val_loss`; the CLI and
+  the job store report the loss of the model that was actually saved
+- 16 new tests (300 total): a batch of one matches the unbatched call exactly, examples in a
+  batch are independent, a batched loss equals the mean of its windows, rank-4 input is refused
+
+### Experiment: what the batch dimension bought
+Big model (embed 256, 6 blocks, 8 heads, context 256, batch 32, 4.8 M params):
+
+| | s/step | token/s |
+|---|---|---|
+| Python loop, GPU | 1.343 | 6,098 |
+| `(B, T)` batch, GPU | **0.066** | **124,721** |
+
+**20x**, and 5000 steps went from 112 minutes to 5.5 minutes. The GPU is now 19x faster than the
+CPU on this model; before the change it was *slower* than the CPU. The underlying reason, timed
+directly: 32 separate `(256, 256) @ (256, 256)` matmuls take 941 us, the one batched matmul 79 us.
+
+Re-running the 3d config (211 k params, 2000 steps) to check for a quality regression: 213.8 s on
+CPU before, **54.0 s** on GPU now, val 1.826. And best-val earned its place on the first try --
+the final evaluation was 1.905 while step 1800 had reached 1.826, so the old code would have
+saved the worse model.
+
+### Mistakes / surprises
+- Two existing tests had to change, and both were right to fail: one asserted that a `(B, T, C)`
+  input is rejected, the other that `(2, 3)` ids are invalid. Replaced with cases that are still
+  invalid (wrong channel count, rank 4, an empty sequence), so the guard is still tested
+- The speed-up is not uniform: the small 211 k model on CPU went 0.100 -> 0.020 s/step (5x),
+  the big model on GPU 20x. The bigger the tensors, the more a launch-bound loop was costing
+
+### Lessons
+- _(fill in, in your own words)_
+
+### Open questions
+- _(fill in)_
