@@ -188,6 +188,15 @@ def train(request: TrainRequest, jobs: Jobs) -> TrainingJob:
     )
 
 
+@app.get("/train")
+def latest_training(jobs: Jobs) -> TrainingJob:
+    """The most recent run, so a reloaded page can pick up one that is still going."""
+    job = jobs.latest()
+    if job is None:
+        raise JobNotFoundError("no training run has been started yet")
+    return job
+
+
 @app.get("/train/{job_id}")
 def train_status(job_id: str, jobs: Jobs) -> TrainingJob:
     """Where is the run? The page polls this and redraws the loss curve."""

@@ -8,6 +8,7 @@
   :root {
     --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #667085; --line: #d9dde5;
     --accent: #2f5bea; --accent-text: #ffffff; --chip: #eef1f7; --error: #b42318;
+    --val: #c2680c; /* the val-loss line; train uses --accent */
     --heat: 47, 91, 234; /* rgb of the heatmap colour; alpha = attention weight */
     color-scheme: light;
   }
@@ -15,6 +16,7 @@
     :root {
       --bg: #12151c; --card: #1b202b; --text: #e6e9f0; --muted: #98a2b3; --line: #2e3544;
       --accent: #6c8cff; --accent-text: #0e1220; --chip: #262d3b; --error: #ff8a80;
+      --val: #f2a85c;
       --heat: 108, 140, 255;
       color-scheme: dark;
     }
@@ -52,6 +54,11 @@
   table.heat td { width: 22px; height: 22px; padding: 0; border: 1px solid var(--bg); }
   table.heat td.future { background: repeating-linear-gradient(45deg, transparent 0 3px, var(--line) 3px 4px); }
   .axis { font-size: 0.8rem; color: var(--muted); }
+  canvas { width: 100%; height: 180px; display: block; background: var(--bg);
+           border: 1px solid var(--line); border-radius: 6px; }
+  .legend { display: flex; gap: 16px; margin-top: 6px; font-size: 0.8rem; color: var(--muted); }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; margin: 4px 0; }
 </style>
 </head>
 <body>
@@ -77,9 +84,49 @@
   <div class="muted" id="tok-stats"></div>
 </section>
 
+<section id="train-panel">
+  <h2>Train</h2>
+  <div class="muted">
+    Train a MiniGPT on one of the texts in <code>data/</code>. The run happens in the
+    background; this panel asks it once a second how far it has got. Watch the two lines:
+    when val stops falling while train keeps going, the model has started memorising.
+  </div>
+  <div class="row">
+    <label>Corpus <select id="tr-corpus"></select></label>
+    <label>Save as <input id="tr-out" value="minigpt.pt" size="14"></label>
+    <label>Steps <input type="number" id="tr-steps" value="500" min="1" max="5000"></label>
+    <label>Learning rate <input type="number" id="tr-lr" value="0.003" min="0.000001" max="1" step="0.001"></label>
+    <label>Device
+      <select id="tr-device">
+        <option value="auto">auto</option><option value="cpu">cpu</option><option value="cuda">cuda</option>
+      </select>
+    </label>
+    <button id="tr-go">Start training</button>
+  </div>
+  <details>
+    <summary>Model size and batching</summary>
+    <div class="row">
+      <label>Context <input type="number" id="tr-block" value="64" min="1" max="256"></label>
+      <label>Embed dim <input type="number" id="tr-embed" value="64" min="1" max="256"></label>
+      <label>Heads <input type="number" id="tr-heads" value="4" min="1" max="16"></label>
+      <label>Blocks <input type="number" id="tr-blocks" value="4" min="1" max="8"></label>
+      <label>Batch <input type="number" id="tr-batch" value="16" min="1" max="64"></label>
+      <label>Eval every <input type="number" id="tr-eval" value="50" min="1" max="5000"></label>
+      <label>Seed <input type="number" id="tr-seed" value="0"></label>
+    </div>
+  </details>
+  <div id="tr-error" class="error"></div>
+  <div class="muted" id="tr-status">idle</div>
+  <canvas id="tr-canvas" aria-label="Training loss curve"></canvas>
+  <div class="legend">
+    <span><i style="background: var(--accent)"></i>train loss</span>
+    <span><i style="background: var(--val)"></i>val loss</span>
+  </div>
+</section>
+
 <section id="generate-panel">
   <h2>Generate</h2>
-  <div class="muted">Continue a prompt with a trained model. Train one with <code>forgelm train-minigpt</code>.</div>
+  <div class="muted">Continue a prompt with a trained model, or train one in the panel above.</div>
   <div class="row">
     <label>Model <select id="gen-model"></select></label>
     <label>Max tokens <input type="number" id="gen-max" value="200" min="0" max="1000"></label>
@@ -220,18 +267,180 @@ $("att-go").onclick = () => run($("att-go"), $("att-error"), async () => {
 $("att-block").onchange = drawAttention;
 $("att-head").onchange = drawAttention;
 
-// ---- Start-up: version and model lists ----
+// ---- Train ----
+// POST /train only starts the run and hands back a ticket, so the page has to keep
+// asking GET /train/{id} how far it has got. One request a second is plenty for a
+// line that moves every `eval_every` steps.
+let pollTimer = null;
+let lastJob = null;
+
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function drawLosses(progress, totalSteps) {
+  const canvas = $("tr-canvas");
+  const width = canvas.clientWidth, height = canvas.clientHeight;
+  // A canvas has two sizes: its CSS box and its pixel grid. Matching the grid to the
+  // device pixel ratio is what keeps the lines from looking blurry.
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(height * ratio);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  if (progress.length === 0) return;
+
+  const pad = { left: 44, right: 12, top: 12, bottom: 20 };
+  const losses = progress.flatMap((p) => [p.train_loss, p.val_loss]);
+  let lo = Math.min(...losses), hi = Math.max(...losses);
+  if (hi - lo < 1e-6) { lo -= 0.5; hi += 0.5; }  // one point, or a flat curve, still needs a range
+  // x is the step out of the total, so the curve fills the box from left to right as it runs.
+  const x = (step) => pad.left + (width - pad.left - pad.right) * (totalSteps ? step / totalSteps : 0);
+  const y = (loss) => pad.top + (height - pad.top - pad.bottom) * (1 - (loss - lo) / (hi - lo));
+
+  ctx.strokeStyle = cssVar("--line");
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top);
+  ctx.lineTo(pad.left, height - pad.bottom);
+  ctx.lineTo(width - pad.right, height - pad.bottom);
+  ctx.stroke();
+
+  ctx.fillStyle = cssVar("--muted");
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillText(hi.toFixed(2), pad.left - 6, y(hi));
+  ctx.fillText(lo.toFixed(2), pad.left - 6, y(lo));
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(`0 - ${totalSteps} steps`, pad.left, height - pad.bottom + 5);
+
+  const line = (key, colour) => {
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    progress.forEach((point, i) => {
+      const px = x(point.step), py = y(point[key]);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+    const last = progress[progress.length - 1];  // a dot on the newest value
+    ctx.fillStyle = colour;
+    ctx.beginPath();
+    ctx.arc(x(last.step), y(last[key]), 2.5, 0, 2 * Math.PI);
+    ctx.fill();
+  };
+  line("train_loss", cssVar("--accent"));
+  line("val_loss", cssVar("--val"));
+}
+
+function renderJob(job) {
+  lastJob = job;
+  drawLosses(job.progress, job.steps);
+  const last = job.progress[job.progress.length - 1];
+  const at = last
+    ? `step ${last.step}/${job.steps} | train ${last.train_loss.toFixed(3)} | val ${last.val_loss.toFixed(3)}`
+    : "starting...";
+  if (job.status === "running") {
+    $("tr-status").textContent = `training ${job.corpus} -> ${job.out} | ${at}`;
+  } else if (job.status === "done") {
+    $("tr-status").textContent =
+      `done in ${job.seconds.toFixed(1)}s | final val loss ${job.val_loss.toFixed(3)} ` +
+      `(perplexity ${Math.exp(job.val_loss).toFixed(1)}) | saved ${job.out}`;
+  } else {
+    $("tr-status").textContent = "failed";
+    $("tr-error").textContent = job.error;
+  }
+}
+
+function stopPolling() {
+  if (pollTimer !== null) clearInterval(pollTimer);
+  pollTimer = null;
+  $("tr-go").disabled = false;
+}
+
+function follow(job) {
+  $("tr-go").disabled = true;  // one run at a time, so the button stays down until it ends
+  renderJob(job);
+  if (job.status !== "running") { stopPolling(); return; }
+  if (pollTimer !== null) return;
+  pollTimer = setInterval(async () => {
+    try {
+      const update = await api(`/train/${job.id}`);
+      renderJob(update);
+      if (update.status === "running") return;
+      stopPolling();
+      if (update.status === "done") await refreshModels();  // the new checkpoint is servable now
+    } catch (e) {
+      $("tr-error").textContent = e.message;
+      stopPolling();
+    }
+  }, 1000);
+}
+
+// Used on load and when a start is refused: find the run that is already going.
+async function attachToLatest() {
+  try {
+    follow(await api("/train"));  // 404 when nothing has ever been started
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+$("tr-go").onclick = async () => {
+  // Not the shared run(): that re-enables the button as soon as the request returns,
+  // and here the button must stay down for the whole run.
+  $("tr-error").textContent = "";
+  $("tr-go").disabled = true;
+  try {
+    follow(await api("/train", {
+      corpus: $("tr-corpus").value,
+      out: $("tr-out").value,
+      steps: Number($("tr-steps").value),
+      lr: Number($("tr-lr").value),
+      batch_size: Number($("tr-batch").value),
+      block_size: Number($("tr-block").value),
+      embed_dim: Number($("tr-embed").value),
+      num_heads: Number($("tr-heads").value),
+      num_blocks: Number($("tr-blocks").value),
+      eval_every: Number($("tr-eval").value),
+      device: $("tr-device").value,
+      seed: Number($("tr-seed").value),
+    }));
+  } catch (e) {
+    $("tr-error").textContent = e.message;
+    // A 409 means someone already started one; show that run instead of nothing.
+    if (!(await attachToLatest())) $("tr-go").disabled = false;
+  }
+};
+
+window.addEventListener("resize", () => {
+  if (lastJob) drawLosses(lastJob.progress, lastJob.steps);
+});
+
+// ---- Start-up: version, model lists, corpora, any run already going ----
+async function refreshModels() {
+  const models = await api("/models");
+  const fill = (select, list) => {
+    const chosen = select.value;  // keep the user's choice across a refresh
+    select.replaceChildren(...list.map((m) => new Option(`${m.name} (${m.kind})`, m.name)));
+    if (list.length === 0) select.append(new Option("no model found: train one first", ""));
+    else if (list.some((m) => m.name === chosen)) select.value = chosen;
+  };
+  fill($("gen-model"), models);
+  fill($("att-model"), models.filter((m) => m.kind === "minigpt"));
+}
+
 async function init() {
   try {
     const health = await api("/health");
     $("version").textContent = `v${health.version}`;
-    const models = await api("/models");
-    const fillModels = (select, list) => {
-      select.replaceChildren(...list.map((m) => new Option(`${m.name} (${m.kind})`, m.name)));
-      if (list.length === 0) select.append(new Option("no model found: train one first", ""));
-    };
-    fillModels($("gen-model"), models);
-    fillModels($("att-model"), models.filter((m) => m.kind === "minigpt"));
+    await refreshModels();
+    const corpora = await api("/corpora");
+    $("tr-corpus").replaceChildren(...corpora.map((name) => new Option(name, name)));
+    if (corpora.length === 0) $("tr-corpus").append(new Option("no .txt file in data/", ""));
+    await attachToLatest();  // a reloaded page picks up a run that is still going
   } catch (e) {
     $("version").textContent = `cannot reach the API: ${e.message}`;
   }

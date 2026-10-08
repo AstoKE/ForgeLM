@@ -1,6 +1,6 @@
 # ForgeLM architecture
 
-_Last updated: Sprint 4b-1_
+_Last updated: Sprint 4b_
 
 ## Principle: thin adapters around core logic
 
@@ -24,10 +24,10 @@ _Last updated: Sprint 4b-1_
 | Module | Role |
 |---|---|
 | `forgelm/__init__.py` | Package marker and `__version__` (read from installed metadata) |
-| `forgelm/api.py` | FastAPI `app`; `GET /health`, `POST /tokenize`, `GET /models`, `POST /generate`, `POST /attention`, `GET /corpora`, `POST /train`, `GET /train/{id}`, `GET /ui`. Maps the core error types to 422 / 404 / 409 / 503 |
+| `forgelm/api.py` | FastAPI `app`; `GET /health`, `POST /tokenize`, `GET /models`, `POST /generate`, `POST /attention`, `GET /corpora`, `POST /train`, `GET /train`, `GET /train/{id}`, `GET /ui`. Maps the core error types to 422 / 404 / 409 / 503 |
 | `forgelm/inference/local.py` | `ModelStore` (a checkpoint folder with a cache; names only, no paths), `generate_text`, `attention_maps`. Knows nothing about HTTP; torch is imported lazily ([ADR 0006](decisions/0006-dashboard-ui.md)) |
 | `forgelm/training/jobs.py` | `TrainingJobStore`: starts a run on a background thread and keeps its progress in memory. `POST /train` returns a job id, `GET /train/{id}` reports `running` / `done` / `failed`. One run at a time (409); corpus and output are file names, never paths ([ADR 0007](decisions/0007-background-training-jobs.md)) |
-| `forgelm/ui/index.html` | The dashboard: Tokenizer, Generate and Attention panels, vanilla JS, no build step |
+| `forgelm/ui/index.html` | The dashboard: Tokenizer, Train, Generate and Attention panels, vanilla JS, no build step. The Train panel starts a run, polls `GET /train/{id}` once a second and draws both loss curves on a `<canvas>` |
 | `forgelm/cli.py` | `forgelm` command; `--version`, `serve`, `tokenize`, `train-bigram`, `train-neural-bigram`, `train-minigpt`, `generate` (`.json` bigram or `.pt` MiniGPT) |
 | `forgelm/tokenizer/base.py` | `Tokenizer` protocol: `encode`, `decode`, `tokens`, `vocab_size`, `unk_id` |
 | `forgelm/tokenizer/char.py` | `CharTokenizer` (vocab from corpus, `<unk>` = id 0) |

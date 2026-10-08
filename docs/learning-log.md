@@ -834,3 +834,56 @@ the difference is inside the +-0.05 wobble of an 8-window val estimate.
 
 ### Open questions
 - _(fill in)_
+
+---
+
+## Sprint 4b-2: The training panel and the loss curve (2026-10-08)
+
+### Concepts
+- The page holds the **polling loop**, not the server: `POST /train` gives a job id, then a
+  `setInterval` asks `GET /train/{id}` once a second and redraws. It stops itself as soon as the
+  status is no longer `running`
+- A **canvas has two sizes**: the CSS box it occupies and the pixel grid it draws on. Setting
+  `canvas.width = clientWidth * devicePixelRatio` and scaling the context is what keeps the
+  lines sharp instead of blurry
+- The x axis is `step / total_steps`, not "the points we have", so the curve **fills the box
+  from left to right** as the run proceeds and the shape does not jump around
+- **Reload-safe**: `GET /train` returns the most recent run, so a page opened (or refreshed)
+  while a run is going attaches to it instead of showing nothing
+- Colours come from the CSS variables (`--accent` for train, `--val` for val), read with
+  `getComputedStyle`, so the chart follows light and dark mode like the rest of the page
+
+### What we built
+- A Train panel: corpus dropdown (from `GET /corpora`), output name, steps, learning rate and
+  device, with model size and batching tucked into a `<details>`
+- `drawLosses` on a `<canvas>`: two lines, min/max loss labels, a dot on the newest value, and a
+  redraw on window resize
+- `GET /train` (the latest run), which also stops `TrainingJobStore.latest()` being dead code
+- When a run finishes, the model lists are refreshed, so the checkpoint just written appears in
+  Generate and Attention without a reload. The refresh keeps the user's current selection
+- 2 new tests (284 total) plus a stricter `/ui` test: the new panel, the canvas, the new routes
+
+### Experiment: the page driven in headless Chrome
+Served on port 8791, rendered with `chrome --headless --dump-dom` and `--screenshot`:
+- the dropdowns are filled from the API (`tinyshakespeare.txt`, `bigram.json`, `minigpt.pt`),
+  so the JavaScript really ran
+- during a run: `training tinyshakespeare.txt -> ui-demo.pt | step 0/1500 | train 4.347 |
+  val 4.443`, the Start button rendered `disabled`, and the curve started at the left edge
+- after a run: `done in 4.4s | final val loss 2.821 (perplexity 16.8) | saved ui-demo.pt`, with
+  both lines drawn across the box
+
+### Mistakes / surprises
+- The shared `run()` helper re-enables its button in a `finally`, which would have unlocked
+  "Start training" the moment `POST /train` returned, while the run was still going. The Train
+  button needed its own handler that keeps the button down until polling stops
+- A test asserted `"innerHTML" not in page` to prove the page never builds markup from typed
+  text. It failed on the **comment** that says "never innerHTML". Narrowed to `".innerHTML"`,
+  which is what an actual assignment looks like
+- `virtual-time-budget` in headless Chrome fast-forwards timers, so a screenshot taken during a
+  run catches an early poll rather than a mid-run one. Enough to prove the live path works
+
+### Lessons
+- _(fill in, in your own words)_
+
+### Open questions
+- _(fill in)_

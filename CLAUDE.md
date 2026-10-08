@@ -52,11 +52,21 @@ understand, debug and extend everything in this repo.
   attention heatmap, no framework; [ADR 0006](docs/decisions/0006-dashboard-ui.md)). 240 tests;
   the page was also driven in headless Chrome. Models are looked up by file name only (path
   traversal is rejected). The 4a quiz is not asked yet.
-- ⏳ **Next: Sprint 4b, live training in the dashboard.** `POST /train` starts a background
-  thread and returns a job id, the page polls `GET /train/{id}` and draws the loss curve on a
-  `<canvas>`; needs a progress callback in `train_minigpt`. Start with a concept briefing, in
-  simple language. Optional later: the `(B, T)` batch dimension (needs approval) and the
-  20,000-step overfitting experiment.
+- ✅ **Sprint 4b: Live training in the dashboard.** 4b-1: `on_progress` callback in
+  `train_minigpt` (the CLI now prints steps live instead of 213 s of silence),
+  `forgelm/training/jobs.py` (`TrainingJobStore`: background thread, one run at a time,
+  in-memory progress), `GET /corpora`, `POST /train` (202 + job id), `GET /train`,
+  `GET /train/{id}` ([ADR 0007](docs/decisions/0007-background-training-jobs.md)). 4b-2: a Train
+  panel in `/ui` that polls once a second and draws both loss curves on a `<canvas>`, and
+  refreshes the model lists when a run finishes. 284 tests; the page was driven in headless
+  Chrome, running and finished. Corpus and output are file names inside one folder, never paths;
+  every hyperparameter is capped (`MAX_STEPS = 5000`).
+  The 4a and 4b quizzes are still unanswered (see `docs/learning-log.md`).
+- ⏳ **Next: Sprint 5, an open-source LLM** (Ollama / llama.cpp / HF) behind the same
+  `/generate` endpoint, so the dashboard can talk to a real assistant instead of MiniGPT. Start
+  with a concept briefing, in simple language. Optional leftovers: the `(B, T)` batch dimension
+  (needs approval; it is why the GPU is slower than the CPU), the 20,000-step overfitting
+  experiment, a best-val checkpoint, and cancelling a running job.
 
 Environment: torch 2.14.0+cu130 in `.venv` (CUDA 13.0 driver, RTX 4060 8 GB). Install with
 `pip install torch --index-url https://download.pytorch.org/whl/cu130` then `pip install -e ".[dev,ml]"`.

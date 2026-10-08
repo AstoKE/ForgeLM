@@ -165,10 +165,20 @@ def test_ui_page_is_served_and_wired_to_the_api():
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     page = response.text
-    for element in ("tokenizer-panel", "generate-panel", "attention-panel", "att-table"):
+    for element in (
+        "tokenizer-panel",
+        "train-panel",
+        "generate-panel",
+        "attention-panel",
+        "att-table",
+        "tr-canvas",
+        "tr-corpus",
+    ):
         assert f'id="{element}"' in page
-    for route in ("/tokenize", "/generate", "/attention", "/models"):
+    for route in ("/tokenize", "/generate", "/attention", "/models", "/corpora", "/train"):
         assert route in page
+    # Typed text must never be able to become markup, so the page never assigns innerHTML.
+    assert ".innerHTML" not in page
 
 
 # --- training in the background (Sprint 4b) --------------------------------------------------
@@ -321,3 +331,23 @@ def test_train_without_torch_returns_503(train_client, monkeypatch):
 
     assert response.status_code == 503
     assert "PyTorch is not installed" in response.json()["detail"]
+
+
+def test_latest_training_is_404_before_anything_has_run(train_client):
+    client, _ = train_client
+
+    assert client.get("/train").status_code == 404
+
+
+def test_latest_training_lets_a_reloaded_page_find_the_run(train_client):
+    pytest.importorskip("torch")
+    client, store = train_client
+
+    started = client.post("/train", json=TRAIN_BODY).json()
+    store.wait(started["id"], timeout=120)
+
+    latest = client.get("/train")
+
+    assert latest.status_code == 200
+    assert latest.json()["id"] == started["id"]
+    assert latest.json()["status"] == "done"
