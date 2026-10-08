@@ -62,7 +62,10 @@ def tokenize(request: TokenizeRequest) -> Analysis:
 
 # --- Models: list, generate, look inside (Sprint 4a) ---------------------------------------
 
-_store = ModelStore(os.environ.get("FORGELM_CHECKPOINT_DIR", "checkpoints"))
+_store = ModelStore(
+    os.environ.get("FORGELM_CHECKPOINT_DIR", "checkpoints"),
+    os.environ.get("FORGELM_DEVICE", "cpu"),  # "cuda" or "auto" for the bigger models
+)
 
 
 def get_store() -> ModelStore:

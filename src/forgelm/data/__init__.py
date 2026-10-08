@@ -12,10 +12,12 @@ from forgelm.data.code import (
 from forgelm.data.mix import (
     MATH_TAG,
     STORY_TAG,
+    TAGS,
     Mix,
     code_documents,
     math_documents,
     mix_documents,
+    split_documents,
     story_documents,
 )
 from forgelm.data.synthetic import (
@@ -36,6 +38,7 @@ from forgelm.data.synthetic import (
 __all__ = [
     "MATH_TAG",
     "STORY_TAG",
+    "TAGS",
     "Mix",
     "code_documents",
     "math_documents",
@@ -47,6 +50,7 @@ __all__ = [
     "clean_python",
     "collect_python",
     "default_roots",
+    "split_documents",
     "split_files",
     "MAX_DIGITS",
     "MathDataset",

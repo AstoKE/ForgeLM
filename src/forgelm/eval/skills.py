@@ -101,17 +101,23 @@ def math_accuracy(problems: list[Problem], complete: Completer, max_misses: int 
     return report
 
 
-def greedy_completer(model, tokenizer, max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS) -> Completer:
+def greedy_completer(
+    model, tokenizer, max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS, prefix: str = ""
+) -> Completer:
     """Wrap a MiniGPT as a completer: greedy decoding, stopping at the end of the line.
 
     Greedy (temperature 0) because an exam should not depend on a lucky sample.
+
+    `prefix` is text put in front of every prompt and never shown to the grader. A model
+    trained on tagged documents (`<|math|>` and then sums) is asked in the context it was
+    trained in, the way a chat model is asked inside its template.
     """
     newline = tokenizer.encode("\n")
     # If "\n" is not in the vocabulary it encodes to <unk>, which is no stop signal at all.
     stop_id = newline[0] if len(newline) == 1 and newline[0] != tokenizer.unk_id else None
 
     def complete(prompt: str) -> str:
-        ids = tokenizer.encode(prompt)
+        ids = tokenizer.encode(prefix + prompt)
         out = model.generate(ids, max_new_tokens, temperature=0, stop_id=stop_id)
         return tokenizer.decode(out[len(ids) :]).split("\n")[0]
 

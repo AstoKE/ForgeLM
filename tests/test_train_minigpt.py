@@ -411,3 +411,193 @@ def test_a_schedule_changes_the_result_but_the_default_does_not():
 
     assert same(plain, again)
     assert not same(plain, scheduled)
+
+
+# --- writing the best model as training runs (before the big run) -------------------------
+
+
+def test_on_best_fires_only_when_the_val_loss_reaches_a_new_low():
+    calls = []
+    ids = list(range(60))
+
+    _, history = train_minigpt(
+        ids,
+        ids,
+        vocab_size=60,
+        steps=12,
+        eval_every=3,
+        batch_size=2,
+        on_best=lambda model, step: calls.append(step),
+        **TINY,
+    )
+
+    lows = [
+        step
+        for i, step in enumerate(history.steps)
+        if history.val_loss[i] < min(history.val_loss[:i], default=float("inf"))
+    ]
+    assert calls == lows
+    assert calls[0] == 0  # the very first evaluation is trivially a new low
+
+
+def test_the_model_given_to_on_best_holds_the_weights_that_earned_it():
+    snapshots = []
+    ids = list(range(60))
+
+    model, history = train_minigpt(
+        ids,
+        ids,
+        vocab_size=60,
+        steps=12,
+        eval_every=3,
+        batch_size=2,
+        on_best=lambda m, step: snapshots.append([p.detach().clone() for p in m.parameters()]),
+        **TINY,
+    )
+
+    # The last time it fired was the best step, and the returned model is the best one:
+    # so the final weights must equal what the callback saw at that moment.
+    assert snapshots
+    assert history.best_step is not None
+    assert all(
+        torch.equal(final, seen)
+        for final, seen in zip(model.parameters(), snapshots[-1], strict=True)
+    )
+
+
+def test_on_best_also_fires_when_keep_best_is_off():
+    calls = []
+    ids = list(range(60))
+
+    train_minigpt(
+        ids,
+        ids,
+        vocab_size=60,
+        steps=6,
+        eval_every=3,
+        batch_size=2,
+        keep_best=False,
+        on_best=lambda model, step: calls.append(step),
+        **TINY,
+    )
+
+    assert calls
+
+
+def test_training_on_text_hands_the_callback_the_tokenizer_too():
+    seen = []
+
+    train_minigpt_on_text(
+        "to be or not to be, that is the question.\n" * 20,
+        steps=4,
+        eval_every=2,
+        batch_size=2,
+        on_best=lambda model, tokenizer, step: seen.append((tokenizer.vocab_size, step)),
+        **TINY,
+    )
+
+    assert seen
+    assert all(vocab > 0 for vocab, _ in seen)
+
+
+def test_a_failing_callback_stops_training_instead_of_being_swallowed():
+    def disk_full(model, step):
+        raise OSError("disk full")
+
+    ids = list(range(60))
+
+    with pytest.raises(OSError, match="disk full"):
+        train_minigpt(
+            ids, ids, vocab_size=60, steps=6, eval_every=3, batch_size=2, on_best=disk_full, **TINY
+        )
+
+
+# --- continuing a run (a long run is cut into pieces) -------------------------------------
+
+TEXT = "to be or not to be, that is the question.\n" * 30
+
+
+def trained_tiny(steps=60):
+    return train_minigpt_on_text(
+        TEXT, steps=steps, eval_every=steps, batch_size=4, lr=3e-3, seed=0, **TINY
+    )
+
+
+def test_a_resumed_run_starts_where_the_first_one_ended_not_from_random_weights():
+    model, tokenizer, first = trained_tiny()
+
+    _, _, resumed = train_minigpt_on_text(
+        TEXT,
+        model=model,
+        resume_tokenizer=tokenizer,
+        steps=2,
+        eval_every=2,
+        batch_size=4,
+        seed=1,
+        **TINY,
+    )
+    _, _, fresh = train_minigpt_on_text(TEXT, steps=2, eval_every=2, batch_size=4, seed=1, **TINY)
+
+    assert resumed.val_loss[0] < fresh.val_loss[0] - 0.5  # it did not start from scratch
+    assert resumed.val_loss[0] == pytest.approx(first.val_loss[-1], abs=0.5)
+
+
+def test_training_goes_on_in_the_model_that_was_passed():
+    model, tokenizer, _ = trained_tiny(steps=10)
+    before = [p.detach().clone() for p in model.parameters()]
+
+    returned, _, _ = train_minigpt_on_text(
+        TEXT,
+        model=model,
+        resume_tokenizer=tokenizer,
+        steps=6,
+        eval_every=3,
+        batch_size=4,
+        keep_best=False,
+        **TINY,
+    )
+
+    assert returned is model
+    assert any(not torch.equal(a, b) for a, b in zip(before, model.parameters(), strict=True))
+
+
+def test_the_size_of_a_resumed_model_is_its_own_not_the_flags():
+    model, tokenizer, _ = trained_tiny(steps=4)
+    width, context = model.embed_dim, model.block_size
+
+    sizes = {"embed_dim": 99, "num_heads": 3, "num_blocks": 7, "block_size": 1000}
+    returned, _, _ = train_minigpt_on_text(
+        TEXT,
+        model=model,
+        resume_tokenizer=tokenizer,
+        steps=2,
+        eval_every=2,
+        batch_size=2,
+        device="cpu",
+        **sizes,
+    )
+
+    assert (returned.embed_dim, returned.block_size) == (width, context)
+
+
+def test_a_model_that_knows_a_different_number_of_characters_is_refused():
+    model, _, _ = trained_tiny(steps=4)
+
+    with pytest.raises(ValueError, match="characters"):
+        train_minigpt(
+            list(range(50)), list(range(50)), vocab_size=model.vocab_size + 5, model=model, steps=2
+        )
+
+
+def test_a_text_with_other_characters_than_the_checkpoint_is_refused():
+    # Same vocabulary *size* would not be enough: the ids would mean different characters.
+    model, tokenizer, _ = trained_tiny(steps=4)
+
+    with pytest.raises(ValueError, match="different set of characters"):
+        train_minigpt_on_text(
+            "QWERTYUIOP ASDFGHJKL " * 40,
+            model=model,
+            resume_tokenizer=tokenizer,
+            steps=2,
+            **TINY,
+        )

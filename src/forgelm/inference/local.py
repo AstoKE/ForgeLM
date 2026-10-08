@@ -71,8 +71,11 @@ class ModelStore:
     "/etc/passwd") is rejected, so a request can never reach outside the folder.
     """
 
-    def __init__(self, directory: str | Path) -> None:
+    def __init__(self, directory: str | Path, device: str = "cpu") -> None:
         self.directory = Path(directory)
+        # "cpu", "cuda" or "auto". A 25M-parameter model is slow to sample on a CPU, so the
+        # server can be told to use the GPU (FORGELM_DEVICE); the default stays the safe one.
+        self.device = device
         self._cache: dict[str, tuple[int, LoadedModel]] = {}
         self._lock = threading.Lock()  # the web server handles requests in several threads
 
@@ -106,8 +109,7 @@ class ModelStore:
             self._cache[name] = (stamp, loaded)
             return loaded
 
-    @staticmethod
-    def _load(name: str, path: Path) -> LoadedModel:
+    def _load(self, name: str, path: Path) -> LoadedModel:
         kind = SUFFIXES[path.suffix]
         try:
             if kind == "bigram":
@@ -115,11 +117,12 @@ class ModelStore:
             else:
                 try:
                     from forgelm.models.minigpt import load_minigpt
+                    from forgelm.models.neural_bigram import pick_device
                 except ImportError as exc:
                     raise MLNotInstalledError(
                         'PyTorch is not installed; see README ("pip install -e .[ml]")'
                     ) from exc
-                model, tokenizer = load_minigpt(path)
+                model, tokenizer = load_minigpt(path, device=pick_device(self.device))
         except (OSError, ValueError, KeyError) as exc:
             raise InvalidRequestError(f"cannot load model {name!r}: {exc}") from exc
         return LoadedModel(name, kind, model, tokenizer)

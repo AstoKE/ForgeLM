@@ -468,4 +468,129 @@ def test_eval_code_needs_a_corpus_with_a_held_out_file(code_corpus, tmp_path, ca
         main(["eval-code", "--model", str(model), "--corpus", str(no_markers)])
 
     assert exc.value.code == 2
-    assert "no complete file" in capsys.readouterr().err
+    assert "no complete code file" in capsys.readouterr().err
+
+
+def test_the_best_model_is_on_disk_before_training_ends(tmp_path, capsys, monkeypatch):
+    """A crash an hour into a run must not lose the model: it is written as it improves."""
+    pytest.importorskip("torch")
+    from forgelm.models import minigpt
+
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("to be or not to be, that is the question.\n" * 20, encoding="utf-8")
+    out = tmp_path / "ckpt" / "m.pt"
+    writes = []
+    real_save = minigpt.save_minigpt
+
+    def watching_save(path, model, tokenizer):
+        real_save(path, model, tokenizer)
+        writes.append((str(path), out.exists()))
+
+    monkeypatch.setattr(minigpt, "save_minigpt", watching_save)
+
+    main(
+        ["train-minigpt", "--corpus", str(corpus), "--out", str(out), "--steps", "6"]
+        + ["--embed-dim", "16", "--heads", "2", "--blocks", "1", "--block-size", "8"]
+        + ["--batch-size", "2", "--eval-every", "2", "--device", "cpu"]
+    )
+
+    assert len(writes) >= 2  # at least one mid-run write, plus the final one
+    assert writes[0][0].endswith(".partial")  # written beside, then swapped in
+    assert out.is_file()
+    assert not list(out.parent.glob("*.partial"))  # no half-written file left behind
+
+
+def test_eval_math_understands_escapes_in_the_prefix(math_files, tmp_path, capsys, monkeypatch):
+    pytest.importorskip("torch")
+    from forgelm import eval as forge_eval
+
+    seen_prefixes = []
+    real = forge_eval.greedy_completer
+
+    def spying(model, tokenizer, *args, **kwargs):
+        seen_prefixes.append(kwargs.get("prefix"))
+        return real(model, tokenizer, *args, **kwargs)
+
+    monkeypatch.setattr(forge_eval, "greedy_completer", spying)
+    model = tmp_path / "m.pt"
+    main(
+        ["train-minigpt", "--corpus", str(math_files), "--out", str(model), "--steps", "2"]
+        + ["--embed-dim", "16", "--heads", "2", "--blocks", "1", "--block-size", "16"]
+        + ["--batch-size", "2", "--eval-every", "2", "--device", "cpu"]
+    )
+    capsys.readouterr()
+    folder = math_files.parent
+
+    main(
+        ["eval-math", "--model", str(model), "--limit", "2", "--prefix", "<|math|>\n"]
+        + ["--holdout", str(folder / "m-holdout.txt"), "--seen", str(folder / "m-seen.txt")]
+    )
+
+    assert seen_prefixes == ["<|math|>\n"]  # the two characters \ and n became a real newline
+
+
+def test_generate_accepts_a_device_and_rejects_an_unknown_one(trained_minigpt, capsys):
+    args = ["generate", "--model", str(trained_minigpt), "--prompt", "to", "--max-tokens", "5"]
+
+    assert main([*args, "--device", "cpu", "--seed", "1"]) == 0
+    assert capsys.readouterr().out.startswith("to")
+
+    with pytest.raises(SystemExit) as exc:
+        main([*args, "--device", "tpu"])
+    assert exc.value.code == 2
+
+
+def test_asking_for_cuda_without_a_gpu_is_a_clear_cli_error(trained_minigpt, capsys, monkeypatch):
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["generate", "--model", str(trained_minigpt), "--prompt", "to", "--device", "cuda"])
+
+    assert exc.value.code == 2
+    assert "CUDA requested but not available" in capsys.readouterr().err
+
+
+def test_resume_continues_training_from_a_checkpoint(trained_minigpt, tmp_path, capsys):
+    corpus = tmp_path / "corpus.txt"  # the very text the fixture trained on
+    corpus.write_text("to be or not to be, that is the question.\n" * 20, encoding="utf-8")
+    out = tmp_path / "continued.pt"
+
+    code = main(
+        ["train-minigpt", "--corpus", str(corpus), "--out", str(out), "--steps", "6"]
+        + ["--resume", str(trained_minigpt), "--batch-size", "2", "--eval-every", "3"]
+        + ["--seed", "1", "--device", "cpu"]
+    )
+
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert "resuming from" in printed
+    assert "the size flags are ignored" in printed
+    assert out.is_file()
+
+
+def test_resume_from_a_missing_checkpoint_is_a_clear_error(tmp_path, capsys):
+    pytest.importorskip("torch")
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("to be or not to be\n" * 20, encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        main(["train-minigpt", "--corpus", str(corpus), "--resume", str(tmp_path / "nope.pt")])
+
+    assert exc.value.code == 2
+    assert "cannot resume from" in capsys.readouterr().err
+
+
+def test_resume_refuses_a_text_with_different_characters(trained_minigpt, tmp_path, capsys):
+    other = tmp_path / "other.txt"
+    other.write_text("QWERTYUIOP ASDFGHJKL\n" * 20, encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        main(
+            ["train-minigpt", "--corpus", str(other), "--resume", str(trained_minigpt)]
+            + ["--steps", "2", "--device", "cpu"]
+        )
+
+    assert exc.value.code == 2
+    assert "different set of characters" in capsys.readouterr().err

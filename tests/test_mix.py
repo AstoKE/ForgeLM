@@ -8,6 +8,7 @@ from forgelm.data import (
     code_documents,
     math_documents,
     mix_documents,
+    split_documents,
     story_documents,
 )
 
@@ -169,3 +170,49 @@ def test_bad_inputs_are_refused():
 
     with pytest.raises(ValueError, match="no documents"):
         mix_documents({"a": []}, {"a": 10})
+
+
+# --- cutting a tagged text back into documents -----------------------------------------------
+
+
+def test_a_mix_can_be_cut_back_into_the_documents_it_was_made_of():
+    mix = mix_documents(sources(), {"story": 700, "code": 900, "math": 500}, seed=2)
+
+    documents = split_documents(mix.text)
+
+    tags = [tag for tag, _ in documents]
+    assert tags.count(STORY_TAG) == mix.documents["story"]
+    assert tags.count(FILE_MARKER) == mix.documents["code"]
+    assert tags.count(MATH_TAG) == mix.documents["math"]
+
+
+def test_a_code_file_does_not_swallow_the_story_that_follows_it():
+    # The reason this exists: cutting on the file marker alone would hand a "real code"
+    # sample that ends in somebody else's story.
+    text = f"{FILE_MARKER}\nx = 1\n{STORY_TAG}\nOnce upon a time.\n{FILE_MARKER}\ny = 2\n"
+
+    assert split_documents(text) == [
+        (FILE_MARKER, "x = 1\n"),
+        (STORY_TAG, "Once upon a time.\n"),
+        (FILE_MARKER, "y = 2\n"),
+    ]
+
+
+def test_text_before_the_first_tag_is_dropped_as_a_document_cut_in_half():
+    text = f"the rest of a file we never saw the start of\n{FILE_MARKER}\nx = 1\n"
+
+    assert split_documents(text) == [(FILE_MARKER, "x = 1\n")]
+
+
+def test_a_text_without_any_tag_has_no_documents():
+    assert split_documents("just words\nand more words\n") == []
+    assert split_documents("") == []
+
+
+def test_code_bodies_come_back_as_the_files_they_were():
+    files = ["def f():\n    return 1\n" * 10, "class A:\n    pass\n" * 10]
+    docs = code_documents(build_code_corpus(files, seed=0))
+
+    bodies = [body for tag, body in split_documents("".join(docs)) if tag == FILE_MARKER]
+
+    assert sorted(bodies) == sorted(files)

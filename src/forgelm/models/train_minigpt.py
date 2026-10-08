@@ -170,6 +170,8 @@ def train_minigpt(
     keep_best: bool = True,
     warmup_steps: int = 0,
     min_lr_fraction: float = 1.0,
+    on_best: Callable[[MiniGPT, int], None] | None = None,
+    model: MiniGPT | None = None,
 ) -> tuple[MiniGPT, TrainHistory]:
     """Train a MiniGPT, returning the model and the loss history.
 
@@ -180,6 +182,17 @@ def train_minigpt(
     `warmup_steps` and `min_lr_fraction` shape the learning rate (see `lr_at`); the defaults
     keep it constant.
 
+    Passing `model` continues training an existing one instead of starting from random
+    weights: its own size is used (`embed_dim`, `num_heads`, `num_blocks` and `block_size`
+    are ignored) and it stays on its device. Adam's moving averages are not part of a
+    checkpoint, so they start from zero again; a short `warmup_steps` keeps that restart
+    from kicking the weights.
+
+    `on_best(model, step)` is called each time the val loss reaches a new low, with the model
+    holding exactly the weights that earned it. A caller can write a checkpoint there: a run
+    of an hour then leaves its best model on disk as it goes, usable (and gradable) while
+    training continues, and a crash loses minutes, not everything.
+
     With `keep_best` (the default) the weights from the lowest val loss are remembered and
     restored at the end, so a long run that starts overfitting still returns its best model
     instead of its last one. The cost is one extra copy of the parameters in memory.
@@ -188,10 +201,20 @@ def train_minigpt(
         raise ValueError("steps, batch_size, eval_every and eval_batches must be >= 1")
     lr_at(0, steps, lr, warmup_steps, min_lr_fraction)  # reject a bad schedule before training
 
-    dev = pick_device(device)
+    if model is None:
+        dev = pick_device(device)
+        model = MiniGPT(
+            vocab_size, embed_dim, num_heads, num_blocks, block_size, device=dev, seed=seed
+        )
+    else:
+        if model.vocab_size != vocab_size:
+            raise ValueError(
+                f"the model knows {model.vocab_size} characters but the text has {vocab_size}"
+            )
+        dev = model.token_embedding.device
+        block_size = model.block_size  # windows are cut to the length the model can read
     train = torch.tensor(train_ids, dtype=torch.long, device=dev)
     val = torch.tensor(val_ids, dtype=torch.long, device=dev)
-    model = MiniGPT(vocab_size, embed_dim, num_heads, num_blocks, block_size, device=dev, seed=seed)
     parameters = model.parameters()
     optimizer = Adam(parameters, lr=lr)
     # Own generators (on CPU), so window sampling is reproducible and independent of
@@ -210,9 +233,13 @@ def train_minigpt(
         history.steps.append(step)
         history.train_loss.append(train_loss)
         history.val_loss.append(val_loss)
-        if keep_best and val_loss < best["val"]:
-            # detach(): a snapshot of the numbers, not a branch of the autograd graph.
-            best.update(val=val_loss, step=step, weights=[p.detach().clone() for p in parameters])
+        if val_loss < best["val"]:
+            best.update(val=val_loss, step=step)
+            if keep_best:
+                # detach(): a snapshot of the numbers, not a branch of the autograd graph.
+                best["weights"] = [p.detach().clone() for p in parameters]
+            if on_best is not None:
+                on_best(model, step)
         if on_progress is not None:
             on_progress(step, train_loss, val_loss)
 
@@ -245,12 +272,28 @@ def train_minigpt(
 
 
 def train_minigpt_on_text(
-    text: str, val_fraction: float = 0.1, **kwargs
+    text: str,
+    val_fraction: float = 0.1,
+    resume_tokenizer: CharTokenizer | None = None,
+    **kwargs,
 ) -> tuple[MiniGPT, CharTokenizer, TrainHistory]:
     """Char-tokenize and split `text` like the bigram models, then train MiniGPT.
 
     The tokenizer is returned too: the model's ids mean nothing without it.
     """
     tokenizer, train_ids, val_ids = encode_and_split(text, val_fraction)
+    resumed = kwargs.get("model")
+    if resumed is not None and resume_tokenizer is not None:
+        # The ids in the checkpoint mean "the third character of *its* vocabulary". If this
+        # text has a different character set, every id would silently mean something else.
+        if resume_tokenizer.itos != tokenizer.itos:
+            raise ValueError(
+                "this text has a different set of characters than the checkpoint was "
+                "trained on, so its token ids would mean different characters"
+            )
+    on_best = kwargs.pop("on_best", None)
+    if on_best is not None:
+        # Hand the callback the tokenizer too: a checkpoint needs both to be loadable.
+        kwargs["on_best"] = lambda model, step: on_best(model, tokenizer, step)
     model, history = train_minigpt(train_ids, val_ids, tokenizer.vocab_size, **kwargs)
     return model, tokenizer, history

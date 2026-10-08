@@ -5,6 +5,7 @@ Like api.py, this only parses input and calls into the rest of the package.
 
 import argparse
 import math
+import os
 import random
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from forgelm.data import (
     math_documents,
     mix_documents,
     parse_problems,
-    split_files,
+    split_documents,
     story_documents,
 )
 from forgelm.models import TrainReport, load_checkpoint, save_checkpoint, train_on_text
@@ -69,6 +70,13 @@ def build_parser() -> argparse.ArgumentParser:
     gpt = subcommands.add_parser("train-minigpt", help="Train MiniGPT (needs torch).")
     gpt.add_argument("--corpus", required=True, help="UTF-8 training text.")
     gpt.add_argument("--out", default="checkpoints/minigpt.pt")
+    gpt.add_argument(
+        "--resume",
+        help="Continue training this checkpoint instead of starting from random weights. "
+        "Its size is used and --embed-dim/--heads/--blocks/--block-size are ignored. Give a "
+        "different --seed than the first run, or it sees the same windows again; Adam starts "
+        "afresh, so add a short --warmup-steps.",
+    )
     gpt.add_argument("--steps", type=int, default=1000)
     gpt.add_argument("--lr", type=float, default=3e-3, help="Learning rate (Adam).")
     gpt.add_argument(
@@ -101,6 +109,12 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--max-tokens", type=int, default=200)
     generate.add_argument("--temperature", type=float, default=1.0, help="0 = greedy.")
     generate.add_argument("--seed", type=int, help="Fix for reproducible output.")
+    generate.add_argument(
+        "--device",
+        choices=["cpu", "cuda", "auto"],
+        default="cpu",
+        help="Where to run a MiniGPT. A big model is far faster on a GPU.",
+    )
 
     make_math = subcommands.add_parser(
         "make-math-data", help="Write addition problems to train on, plus a hidden exam."
@@ -130,6 +144,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--seen", default="data/math-seen.txt", help="Problems it trained on (the control)."
     )
     eval_math.add_argument("--limit", type=int, help="Grade only the first N problems of each.")
+    eval_math.add_argument(
+        "--prefix",
+        default="",
+        help=r"Text placed before every problem, e.g. '<|math|>\n' for a model trained on "
+        "tagged documents. Backslash escapes such as \\n are understood.",
+    )
+    eval_math.add_argument(
+        "--device",
+        choices=["cpu", "cuda", "auto"],
+        default="cpu",
+        help="Where to run a MiniGPT. A big model is far faster on a GPU.",
+    )
 
     collect = subcommands.add_parser(
         "collect-code", help="Gather Python source from this machine into one training text."
@@ -174,6 +200,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     eval_code.add_argument(
         "--show", type=int, default=1, help="How many generated samples to print."
+    )
+    eval_code.add_argument(
+        "--device",
+        choices=["cpu", "cuda", "auto"],
+        default="cpu",
+        help="Where to run a MiniGPT. A big model is far faster on a GPU.",
     )
 
     return parser
@@ -318,14 +350,41 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--embed-dim must be divisible by --heads")
         text = read_text_file(parser, args.corpus)
 
+        out_path = Path(args.out)
+
+        def keep(model, tokenizer, step: int) -> None:
+            # The best model so far goes to disk as training runs. Written beside the real
+            # file and swapped in, so a crash mid-write cannot leave a half-written checkpoint.
+            partial = out_path.with_name(out_path.name + ".partial")
+            save_minigpt(partial, model, tokenizer)
+            os.replace(partial, out_path)
+
         def show(step: int, train_loss: float, val_loss: float) -> None:
             # Printed while training runs; 2000 steps are minutes of silence otherwise.
             print(f"step {step:>5} | train {train_loss:.3f} | val {val_loss:.3f}", flush=True)
 
+        resume = {}
+        if args.resume:
+            try:
+                from forgelm.models.minigpt import load_minigpt
+                from forgelm.models.neural_bigram import pick_device
+
+                start, start_tokenizer = load_minigpt(args.resume, device=pick_device(args.device))
+            except (OSError, ValueError, KeyError) as exc:
+                parser.error(f"cannot resume from {args.resume}: {exc}")
+            resume = {"model": start, "resume_tokenizer": start_tokenizer}
+            print(
+                f"resuming from {args.resume}: {start.num_parameters():,} parameters, "
+                f"context {start.block_size} (the size flags are ignored)",
+                flush=True,
+            )
+
         try:
             model, tokenizer, history = train_minigpt_on_text(
                 text,
+                **resume,
                 on_progress=show,
+                on_best=keep,
                 val_fraction=args.val_fraction,
                 steps=args.steps,
                 lr=args.lr,
@@ -370,8 +429,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.model.endswith(".pt"):
             try:
                 from forgelm.models.minigpt import load_minigpt
+                from forgelm.models.neural_bigram import pick_device
 
-                model, tokenizer = load_minigpt(args.model)
+                model, tokenizer = load_minigpt(args.model, device=pick_device(args.device))
             except ImportError:
                 parser.error('PyTorch is not installed; see README ("pip install -e .[ml]")')
             except (OSError, ValueError, KeyError) as exc:
@@ -423,13 +483,15 @@ def main(argv: list[str] | None = None) -> int:
         try:
             from forgelm.eval import greedy_completer, math_accuracy
             from forgelm.models.minigpt import load_minigpt
+            from forgelm.models.neural_bigram import pick_device
 
-            model, tokenizer = load_minigpt(args.model)
+            model, tokenizer = load_minigpt(args.model, device=pick_device(args.device))
         except ImportError:
             parser.error('PyTorch is not installed; see README ("pip install -e .[ml]")')
         except (OSError, ValueError, KeyError) as exc:
             parser.error(f"cannot load model: {exc}")
-        complete = greedy_completer(model, tokenizer)
+        prefix = args.prefix.encode("utf-8").decode("unicode_escape")
+        complete = greedy_completer(model, tokenizer, prefix=prefix)
         for label, path in (("hidden", args.holdout), ("seen", args.seen)):
             try:
                 problems = parse_problems(read_text_file(parser, path))
@@ -500,21 +562,23 @@ def main(argv: list[str] | None = None) -> int:
         try:
             from forgelm.eval import grade_code, real_snippets, sample_code
             from forgelm.models.minigpt import load_minigpt
+            from forgelm.models.neural_bigram import pick_device
 
-            model, tokenizer = load_minigpt(args.model)
+            model, tokenizer = load_minigpt(args.model, device=pick_device(args.device))
         except ImportError:
             parser.error('PyTorch is not installed; see README ("pip install -e .[ml]")')
         except (OSError, ValueError, KeyError) as exc:
             parser.error(f"cannot load model: {exc}")
         corpus = read_text_file(parser, args.corpus)
         # Real code from the part of the corpus the model was *not* trained on: the tail,
-        # which is the validation split of train-minigpt. The file cut by the boundary is
-        # half seen, so the first marker after the boundary is where clean files start.
+        # which is the validation split of train-minigpt. The document cut by the boundary is
+        # half seen and is dropped by split_documents. In a mixed text the code files are
+        # picked out by their tag, so a story that follows a file never leaks into it.
         tail = corpus[int(len(corpus) * (1 - args.val_fraction)) :]
-        start = tail.find(FILE_MARKER)
-        if start < 0:
-            parser.error("the held-out part of the corpus holds no complete file")
-        references = real_snippets(split_files(tail[start:]), args.length, args.samples, args.seed)
+        held_out = [body for tag, body in split_documents(tail) if tag == FILE_MARKER]
+        if not held_out:
+            parser.error("the held-out part of the corpus holds no complete code file")
+        references = real_snippets(held_out, args.length, args.samples, args.seed)
         samples = sample_code(
             model, tokenizer, args.samples, args.length, args.temperature, args.seed
         )

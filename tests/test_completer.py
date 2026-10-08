@@ -116,3 +116,44 @@ def test_a_model_trained_on_addition_is_graded_correctly_by_the_exam():
     assert seen.accuracy > 0.9  # and it knows what it was shown
     assert hidden.accuracy < 0.5  # but a memoriser does not know what it was not
     assert seen.accuracy - hidden.accuracy > 0.4
+
+
+# --- the prefix: asking a tagged model inside its own context ------------------------------
+
+
+class Recorder:
+    """A stand-in model that remembers what it was asked and then writes `reply`."""
+
+    def __init__(self, reply_ids):
+        self.reply_ids = reply_ids
+        self.asked = []
+
+    def generate(self, ids, max_new_tokens, temperature=1.0, stop_id=None, **_):
+        self.asked.append(list(ids))
+        return list(ids) + self.reply_ids
+
+
+def test_the_prefix_is_given_to_the_model_in_front_of_the_prompt():
+    tokenizer = CharTokenizer.from_corpus("<|math|>\n0123456789+=")
+    model = Recorder(tokenizer.encode("7"))
+
+    greedy_completer(model, tokenizer, prefix="<|math|>\n")("3+4=")
+
+    assert tokenizer.decode(model.asked[0]) == "<|math|>\n3+4="
+
+
+def test_the_prefix_is_not_part_of_what_comes_back():
+    # The grader compares the completion to the answer; a leaked prefix would fail everything.
+    tokenizer = CharTokenizer.from_corpus("<|math|>\n0123456789+=")
+    model = Recorder(tokenizer.encode("7\n"))
+
+    assert greedy_completer(model, tokenizer, prefix="<|math|>\n")("3+4=") == "7"
+
+
+def test_without_a_prefix_nothing_is_added():
+    tokenizer = CharTokenizer.from_corpus("0123456789+=\n")
+    model = Recorder(tokenizer.encode("7"))
+
+    greedy_completer(model, tokenizer)("3+4=")
+
+    assert tokenizer.decode(model.asked[0]) == "3+4="

@@ -59,9 +59,7 @@ class Mix:
     chars: dict[str, int]  # and how many characters they add up to
 
 
-def mix_documents(
-    sources: dict[str, list[str]], budgets: dict[str, int], seed: int = 0
-) -> Mix:
+def mix_documents(sources: dict[str, list[str]], budgets: dict[str, int], seed: int = 0) -> Mix:
     """Take whole documents from each source up to its character budget, then interleave.
 
     A budget is a ceiling, reached by adding whole documents: a source is never cut in the
@@ -91,3 +89,28 @@ def mix_documents(
         documents[name], chars[name] = len(taken), size
     rng.shuffle(chosen)
     return Mix("".join(chosen), documents, chars)
+
+
+TAGS = (STORY_TAG, MATH_TAG, FILE_MARKER)
+
+
+def split_documents(text: str) -> list[tuple[str, str]]:
+    """Cut a tagged text back into `(tag, body)` documents.
+
+    Anything before the first tag is dropped: when a text is cut from the middle (the
+    validation tail of a training run) that is the end of a document whose start we do not
+    have, and half a document would be graded as if it were whole.
+    """
+    documents: list[tuple[str, str]] = []
+    tag: str | None = None
+    body: list[str] = []
+    for line in text.splitlines():
+        if line in TAGS:
+            if tag is not None:
+                documents.append((tag, "\n".join(body).strip("\n") + "\n"))
+            tag, body = line, []
+        elif tag is not None:
+            body.append(line)
+    if tag is not None:
+        documents.append((tag, "\n".join(body).strip("\n") + "\n"))
+    return documents

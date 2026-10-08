@@ -176,7 +176,9 @@ class MiniGPT:
             if temperature == 0:
                 ids.append(int(last.argmax()))
             else:
-                probs = torch.softmax(last / temperature, dim=-1)
+                # The seeded generator lives on the CPU, and a vocabulary-sized vector is
+                # nothing to move, so sampling is the same whichever device the model is on.
+                probs = torch.softmax(last / temperature, dim=-1).cpu()
                 ids.append(int(torch.multinomial(probs, 1, generator=generator)))
             if stop_id is not None and ids[-1] == stop_id:
                 break
