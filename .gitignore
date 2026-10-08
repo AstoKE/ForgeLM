@@ -179,7 +179,8 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
-# ForgeLM: datasets and model checkpoints stay out of git
-data/
-checkpoints/
+# ForgeLM: datasets and model checkpoints stay out of git. The leading slash anchors them
+# to the repo root: a bare `data/` would also hide the source package src/forgelm/data/.
+/data/
+/checkpoints/
 *.pt

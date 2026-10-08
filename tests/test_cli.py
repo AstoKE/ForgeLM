@@ -1,3 +1,4 @@
+import re
 import sys
 
 import pytest
@@ -238,3 +239,233 @@ def test_train_minigpt_without_torch_fails_clearly(tmp_path, capsys, monkeypatch
 
     assert exc.value.code == 2
     assert "PyTorch is not installed" in capsys.readouterr().err
+
+
+# --- make-math-data and eval-math (Sprint 4d) ---------------------------------------------
+
+
+@pytest.fixture
+def math_files(tmp_path, capsys):
+    out = tmp_path / "data" / "m.txt"
+    assert main(["make-math-data", "--out", str(out), "--digits", "1", "--lines", "200"]) == 0
+    capsys.readouterr()
+    return out
+
+
+def test_make_math_data_writes_the_corpus_the_exam_and_the_control(math_files, capsys):
+    folder = math_files.parent
+
+    corpus = math_files.read_text(encoding="utf-8").splitlines()
+    hidden = (folder / "m-holdout.txt").read_text(encoding="utf-8").splitlines()
+    seen = (folder / "m-seen.txt").read_text(encoding="utf-8").splitlines()
+
+    assert len(corpus) == 200
+    assert hidden
+    assert not set(hidden) & set(corpus)  # the exam never appears in the training text
+    assert set(seen) <= set(corpus)  # the control only holds problems it trained on
+
+
+def test_make_math_data_reports_what_it_wrote(tmp_path, capsys):
+    out = tmp_path / "m.txt"
+
+    main(["make-math-data", "--out", str(out), "--digits", "1", "--lines", "30"])
+
+    printed = capsys.readouterr().out
+    assert f"wrote {out}" in printed
+    assert "m-holdout.txt" in printed
+    assert "hidden" in printed
+
+
+def test_make_math_data_can_pad_and_reverse(tmp_path):
+    out = tmp_path / "m.txt"
+
+    main(["make-math-data", "--out", str(out), "--digits", "2", "--lines", "20", "--pad"])
+    padded = out.read_text(encoding="utf-8").splitlines()
+    main(["make-math-data", "--out", str(out), "--digits", "2", "--lines", "20", "--reverse"])
+    reversed_ = out.read_text(encoding="utf-8").splitlines()
+
+    assert {len(line) for line in padded} == {9}  # "dd+dd=ddd"
+    for line in reversed_:
+        prompt, _, answer = line.partition("=")
+        a, b = prompt.split("+")
+        assert answer == str(int(a) + int(b))[::-1]
+
+
+def test_make_math_data_refuses_bad_settings(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["make-math-data", "--out", str(tmp_path / "m.txt"), "--digits", "9"])
+
+    assert exc.value.code == 2
+    assert "digits" in capsys.readouterr().err
+
+
+def test_eval_math_prints_a_score_for_the_exam_and_for_the_control(math_files, tmp_path, capsys):
+    pytest.importorskip("torch")
+    model = tmp_path / "ckpt" / "m.pt"
+    main(
+        ["train-minigpt", "--corpus", str(math_files), "--out", str(model), "--steps", "5"]
+        + ["--embed-dim", "16", "--heads", "2", "--blocks", "1", "--block-size", "16"]
+        + ["--batch-size", "2", "--eval-every", "5", "--device", "cpu"]
+    )
+    capsys.readouterr()
+    folder = math_files.parent
+
+    code = main(
+        ["eval-math", "--model", str(model)]
+        + ["--holdout", str(folder / "m-holdout.txt"), "--seen", str(folder / "m-seen.txt")]
+    )
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "hidden:" in out
+    assert "seen:" in out
+    assert "%" in out
+
+
+def test_eval_math_limit_caps_the_number_of_problems(math_files, tmp_path, capsys):
+    pytest.importorskip("torch")
+    model = tmp_path / "m.pt"
+    main(
+        ["train-minigpt", "--corpus", str(math_files), "--out", str(model), "--steps", "2"]
+        + ["--embed-dim", "16", "--heads", "2", "--blocks", "1", "--block-size", "16"]
+        + ["--batch-size", "2", "--eval-every", "2", "--device", "cpu"]
+    )
+    capsys.readouterr()
+    folder = math_files.parent
+
+    main(
+        ["eval-math", "--model", str(model), "--limit", "3"]
+        + ["--holdout", str(folder / "m-holdout.txt"), "--seen", str(folder / "m-seen.txt")]
+    )
+
+    out = capsys.readouterr().out
+    assert re.search(r"hidden: \d+/3 = ", out)  # three problems graded, not the whole file
+    assert re.search(r"seen: \d+/3 = ", out)
+
+
+def test_eval_math_rejects_a_file_that_is_not_made_of_problems(math_files, tmp_path, capsys):
+    pytest.importorskip("torch")
+    model = tmp_path / "m.pt"
+    main(
+        ["train-minigpt", "--corpus", str(math_files), "--out", str(model), "--steps", "2"]
+        + ["--embed-dim", "16", "--heads", "2", "--blocks", "1", "--block-size", "16"]
+        + ["--batch-size", "2", "--eval-every", "2", "--device", "cpu"]
+    )
+    capsys.readouterr()
+    garbage = tmp_path / "garbage.txt"
+    garbage.write_text("this is not arithmetic\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        main(["eval-math", "--model", str(model), "--holdout", str(garbage)])
+
+    assert exc.value.code == 2
+    assert "not a problem line" in capsys.readouterr().err
+
+
+def test_eval_math_fails_clearly_for_a_missing_model(tmp_path, capsys):
+    pytest.importorskip("torch")
+
+    with pytest.raises(SystemExit) as exc:
+        main(["eval-math", "--model", str(tmp_path / "nope.pt")])
+
+    assert exc.value.code == 2
+    assert "cannot load model" in capsys.readouterr().err
+
+
+# --- collect-code and eval-code (Sprint 4d) -----------------------------------------------
+
+SNIPPET = "import os\n\n\ndef join(a, b):\n    return os.path.join(a, b)\n" * 8
+
+
+@pytest.fixture
+def code_corpus(tmp_path, capsys):
+    tree = tmp_path / "src"
+    tree.mkdir()
+    for i in range(30):
+        (tree / f"mod{i}.py").write_text(SNIPPET.replace("join", f"join{i}"), encoding="utf-8")
+    out = tmp_path / "data" / "python.txt"
+    assert main(["collect-code", "--out", str(out), "--root", str(tree)]) == 0
+    capsys.readouterr()
+    return out
+
+
+def test_collect_code_writes_one_corpus_and_reports_what_it_found(tmp_path, capsys):
+    tree = tmp_path / "src"
+    tree.mkdir()
+    (tree / "a.py").write_text(SNIPPET, encoding="utf-8")
+    (tree / "b.py").write_text(SNIPPET.replace("join", "link"), encoding="utf-8")
+    out = tmp_path / "data" / "python.txt"
+
+    assert main(["collect-code", "--out", str(out), "--root", str(tree)]) == 0
+
+    printed = capsys.readouterr().out
+    assert "2 distinct files" in printed
+    assert "distinct characters" in printed
+    assert out.read_text(encoding="utf-8").count("# ----- file -----") == 2
+
+
+def test_collect_code_respects_the_size_limit(tmp_path, capsys):
+    tree = tmp_path / "src"
+    tree.mkdir()
+    for i in range(20):
+        (tree / f"m{i}.py").write_text(SNIPPET.replace("join", f"j{i}"), encoding="utf-8")
+    out = tmp_path / "python.txt"
+
+    main(["collect-code", "--out", str(out), "--root", str(tree), "--max-mb", "0.001"])
+
+    assert out.stat().st_size < 3_000  # about one file's worth, not twenty
+
+
+def test_collect_code_with_nothing_to_collect_fails_clearly(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["collect-code", "--out", str(tmp_path / "x.txt"), "--root", str(tmp_path)])
+
+    assert exc.value.code == 2
+    assert "no usable .py files" in capsys.readouterr().err
+
+
+def test_eval_code_reports_the_model_the_ceiling_and_the_floor(code_corpus, tmp_path, capsys):
+    pytest.importorskip("torch")
+    model = tmp_path / "ckpt" / "code.pt"
+    main(
+        ["train-minigpt", "--corpus", str(code_corpus), "--out", str(model), "--steps", "3"]
+        + ["--embed-dim", "16", "--heads", "2", "--blocks", "1", "--block-size", "16"]
+        + ["--batch-size", "2", "--eval-every", "3", "--device", "cpu"]
+    )
+    capsys.readouterr()
+
+    code = main(
+        ["eval-code", "--model", str(model), "--corpus", str(code_corpus)]
+        + ["--samples", "3", "--length", "60", "--show", "1"]
+    )
+
+    assert code == 0
+    out = capsys.readouterr().out
+    for word in ("generated", "ceiling", "floor", "position", "--- sample 1 ---"):
+        assert word in out
+
+
+def test_eval_code_rejects_bad_settings(tmp_path, capsys):
+    for bad in (["--samples", "0"], ["--length", "0"], ["--val-fraction", "1"]):
+        with pytest.raises(SystemExit) as exc:
+            main(["eval-code", "--model", str(tmp_path / "m.pt"), *bad])
+        assert exc.value.code == 2
+
+
+def test_eval_code_needs_a_corpus_with_a_held_out_file(code_corpus, tmp_path, capsys):
+    pytest.importorskip("torch")
+    model = tmp_path / "code.pt"
+    main(
+        ["train-minigpt", "--corpus", str(code_corpus), "--out", str(model), "--steps", "2"]
+        + ["--embed-dim", "16", "--heads", "2", "--blocks", "1", "--block-size", "16"]
+        + ["--batch-size", "2", "--eval-every", "2", "--device", "cpu"]
+    )
+    capsys.readouterr()
+    no_markers = tmp_path / "plain.txt"
+    no_markers.write_text("just some text without any file marker\n" * 50, encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        main(["eval-code", "--model", str(model), "--corpus", str(no_markers)])
+
+    assert exc.value.code == 2
+    assert "no complete file" in capsys.readouterr().err

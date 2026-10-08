@@ -152,11 +152,16 @@ class MiniGPT:
         max_new_tokens: int,
         generator: torch.Generator | None = None,
         temperature: float = 1.0,
+        stop_id: int | None = None,
     ) -> list[int]:
         """Extend `prompt_ids` one sampled token at a time. temperature=0 means greedy.
 
         Unlike the bigram, this model reads the whole past -- but only the last
         `block_size` tokens of it, because that is all the position table has seats for.
+
+        With `stop_id`, generation ends right after that token is produced (it is kept in
+        the result). An answer that ends at a newline then costs a few steps, not
+        `max_new_tokens`.
         """
         if not prompt_ids:
             raise ValueError("prompt must contain at least one token")
@@ -173,6 +178,8 @@ class MiniGPT:
             else:
                 probs = torch.softmax(last / temperature, dim=-1)
                 ids.append(int(torch.multinomial(probs, 1, generator=generator)))
+            if stop_id is not None and ids[-1] == stop_id:
+                break
         return ids
 
 

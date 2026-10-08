@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -7,6 +9,7 @@ from forgelm.models.train_minigpt import (  # noqa: E402
     Adam,
     estimate_loss,
     get_batch,
+    lr_at,
     train_minigpt,
     train_minigpt_on_text,
 )
@@ -322,3 +325,89 @@ def test_a_batch_loss_equals_the_mean_of_its_windows():
     one_by_one = sum(model.loss(x[i], y[i]) for i in range(len(x))) / len(x)
 
     assert batched.item() == pytest.approx(one_by_one.item(), abs=1e-5)
+
+
+# --- the learning-rate schedule (Sprint 4d) -----------------------------------------------
+
+
+def test_the_defaults_give_a_constant_learning_rate():
+    assert {lr_at(step, 100, 3e-3) for step in range(100)} == {3e-3}
+
+
+def test_warmup_climbs_linearly_to_the_full_rate():
+    rates = [lr_at(step, 100, 1e-3, warmup_steps=10) for step in range(10)]
+
+    assert rates[0] == pytest.approx(1e-4)  # not zero: the first step must still move
+    assert rates[-1] == pytest.approx(1e-3)
+    assert rates == sorted(rates)
+    assert rates[4] == pytest.approx(5e-4)
+
+
+def test_after_warmup_the_rate_decays_to_the_floor():
+    rates = [lr_at(step, 100, 1e-3, warmup_steps=10, min_fraction=0.1) for step in range(100)]
+
+    assert rates[10] == pytest.approx(1e-3)  # the peak
+    assert rates[-1] == pytest.approx(1e-4, rel=0.05)  # lr * min_fraction
+    assert rates[10:] == sorted(rates[10:], reverse=True)  # never goes back up
+    assert min(rates) >= 1e-4 - 1e-12  # and never below the floor
+
+
+def test_the_cosine_is_at_half_height_halfway_through_the_decay():
+    middle = lr_at(55, 100, 1e-3, warmup_steps=10, min_fraction=0.0)
+
+    assert middle == pytest.approx(5e-4, rel=0.05)
+
+
+def test_steps_past_the_end_stay_at_the_floor():
+    assert lr_at(500, 100, 1e-3, warmup_steps=10, min_fraction=0.1) == pytest.approx(1e-4)
+
+
+def test_a_warmup_longer_than_the_run_never_decays():
+    rates = [lr_at(step, 10, 1e-3, warmup_steps=50, min_fraction=0.1) for step in range(10)]
+
+    assert rates == sorted(rates)
+    assert rates[-1] < 1e-3
+
+
+@pytest.mark.parametrize(
+    "bad", [{"min_fraction": -0.1}, {"min_fraction": 1.5}, {"warmup_steps": -1}]
+)
+def test_a_nonsensical_schedule_is_refused(bad):
+    with pytest.raises(ValueError):
+        lr_at(0, 100, 1e-3, **bad)
+
+
+def test_training_with_a_schedule_runs_and_a_bad_one_is_refused_before_training():
+    ids = list(range(60))
+
+    model, history = train_minigpt(
+        ids,
+        ids,
+        vocab_size=60,
+        steps=6,
+        eval_every=3,
+        batch_size=2,
+        warmup_steps=2,
+        min_lr_fraction=0.1,
+        **TINY,
+    )
+
+    assert all(math.isfinite(loss) for loss in history.val_loss)
+    with pytest.raises(ValueError, match="min_fraction"):
+        train_minigpt(ids, ids, vocab_size=60, steps=6, batch_size=2, min_lr_fraction=2.0, **TINY)
+
+
+def test_a_schedule_changes_the_result_but_the_default_does_not():
+    ids = list(range(60))
+    common = dict(steps=8, eval_every=4, batch_size=2, seed=5, **TINY)
+
+    plain, _ = train_minigpt(ids, ids, vocab_size=60, **common)
+    again, _ = train_minigpt(ids, ids, vocab_size=60, **common)
+    shaped = dict(warmup_steps=3, min_lr_fraction=0.1, **common)
+    scheduled, _ = train_minigpt(ids, ids, vocab_size=60, **shaped)
+
+    def same(a, b):
+        return all(torch.equal(x, y) for x, y in zip(a.parameters(), b.parameters(), strict=True))
+
+    assert same(plain, again)
+    assert not same(plain, scheduled)

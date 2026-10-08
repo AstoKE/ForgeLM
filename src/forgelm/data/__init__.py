@@ -1,0 +1,63 @@
+"""Training text we make ourselves (synthetic problems) or collect (source code)."""
+
+from forgelm.data.code import (
+    DEFAULT_PACKAGES,
+    FILE_MARKER,
+    build_code_corpus,
+    clean_python,
+    collect_python,
+    default_roots,
+    split_files,
+)
+from forgelm.data.mix import (
+    MATH_TAG,
+    STORY_TAG,
+    Mix,
+    code_documents,
+    math_documents,
+    mix_documents,
+    story_documents,
+)
+from forgelm.data.synthetic import (
+    MAX_DIGITS,
+    MathDataset,
+    Problem,
+    all_problems,
+    build_math_dataset,
+    make_corpus,
+    make_problem,
+    needs_carry,
+    parse_problem,
+    parse_problems,
+    render,
+    split_problems,
+)
+
+__all__ = [
+    "MATH_TAG",
+    "STORY_TAG",
+    "Mix",
+    "code_documents",
+    "math_documents",
+    "mix_documents",
+    "story_documents",
+    "DEFAULT_PACKAGES",
+    "FILE_MARKER",
+    "build_code_corpus",
+    "clean_python",
+    "collect_python",
+    "default_roots",
+    "split_files",
+    "MAX_DIGITS",
+    "MathDataset",
+    "Problem",
+    "all_problems",
+    "build_math_dataset",
+    "make_corpus",
+    "make_problem",
+    "needs_carry",
+    "parse_problem",
+    "parse_problems",
+    "render",
+    "split_problems",
+]

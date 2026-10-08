@@ -71,6 +71,43 @@ class Adam:
             p.grad = None  # otherwise the next backward() would add to the old gradient
 
 
+def lr_at(
+    step: int,
+    total_steps: int,
+    lr: float,
+    warmup_steps: int = 0,
+    min_fraction: float = 1.0,
+) -> float:
+    """The learning rate for `step`: a linear warm-up, then a cosine slide down.
+
+        lr |      ____
+           |     /     ‾‾--.
+           |    /            ‾--.__
+           |___/                   ‾‾‾  <- lr * min_fraction
+           +-------------------------------> step
+             warm-up    cosine decay
+
+    Warm-up: Adam's very first steps rest on a few gradients, so its estimate of "how big
+    are the pushes" is noisy, and a full-size step then can throw a fresh model somewhere
+    bad. Starting small gives the estimate time to settle.
+    Decay: late in training the model is near a good place, and big steps keep kicking it
+    out of it. Smaller steps let it settle.
+
+    The defaults (`warmup_steps=0`, `min_fraction=1.0`) give a constant `lr`, which is what
+    training did before this existed.
+    """
+    if not 0 <= min_fraction <= 1:
+        raise ValueError("min_fraction must be between 0 and 1")
+    if warmup_steps < 0:
+        raise ValueError("warmup_steps must be >= 0")
+    if step < warmup_steps:
+        return lr * (step + 1) / warmup_steps
+    span = max(total_steps - warmup_steps, 1)
+    progress = min((step - warmup_steps) / span, 1.0)
+    cosine = 0.5 * (1 + math.cos(math.pi * progress))  # 1.0 at the start, 0.0 at the end
+    return lr * (min_fraction + (1 - min_fraction) * cosine)
+
+
 def get_batch(
     ids: torch.Tensor,
     block_size: int,
@@ -131,6 +168,8 @@ def train_minigpt(
     seed: int = 0,
     on_progress: Callable[[int, float, float], None] | None = None,
     keep_best: bool = True,
+    warmup_steps: int = 0,
+    min_lr_fraction: float = 1.0,
 ) -> tuple[MiniGPT, TrainHistory]:
     """Train a MiniGPT, returning the model and the loss history.
 
@@ -138,12 +177,16 @@ def train_minigpt(
     can show the losses *while* training runs instead of after it. This module knows
     nothing about terminals or HTTP: the caller decides what to do with the numbers.
 
+    `warmup_steps` and `min_lr_fraction` shape the learning rate (see `lr_at`); the defaults
+    keep it constant.
+
     With `keep_best` (the default) the weights from the lowest val loss are remembered and
     restored at the end, so a long run that starts overfitting still returns its best model
     instead of its last one. The cost is one extra copy of the parameters in memory.
     """
     if steps < 1 or batch_size < 1 or eval_every < 1 or eval_batches < 1:
         raise ValueError("steps, batch_size, eval_every and eval_batches must be >= 1")
+    lr_at(0, steps, lr, warmup_steps, min_lr_fraction)  # reject a bad schedule before training
 
     dev = pick_device(device)
     train = torch.tensor(train_ids, dtype=torch.long, device=dev)
@@ -177,6 +220,7 @@ def train_minigpt(
     for step in range(steps):
         if step % eval_every == 0:
             record(step)
+        optimizer.lr = lr_at(step, steps, lr, warmup_steps, min_lr_fraction)
         x, y = get_batch(train, block_size, batch_size, train_gen)
         # All B windows go through every operation at once. The old version looped in
         # Python, one window at a time, which is why the GPU used to be slower than the

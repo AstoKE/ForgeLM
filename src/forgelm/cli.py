@@ -6,8 +6,22 @@ Like api.py, this only parses input and calls into the rest of the package.
 import argparse
 import math
 import random
+from pathlib import Path
 
 from forgelm import __version__
+from forgelm.data import (
+    FILE_MARKER,
+    build_code_corpus,
+    build_math_dataset,
+    code_documents,
+    collect_python,
+    default_roots,
+    math_documents,
+    mix_documents,
+    parse_problems,
+    split_files,
+    story_documents,
+)
 from forgelm.models import TrainReport, load_checkpoint, save_checkpoint, train_on_text
 from forgelm.tokenizer import Analysis, analyze, build_tokenizer
 
@@ -57,6 +71,15 @@ def build_parser() -> argparse.ArgumentParser:
     gpt.add_argument("--out", default="checkpoints/minigpt.pt")
     gpt.add_argument("--steps", type=int, default=1000)
     gpt.add_argument("--lr", type=float, default=3e-3, help="Learning rate (Adam).")
+    gpt.add_argument(
+        "--warmup-steps", type=int, default=0, help="Ramp the learning rate up over N steps."
+    )
+    gpt.add_argument(
+        "--min-lr-fraction",
+        type=float,
+        default=1.0,
+        help="Cosine-decay the learning rate down to this share of --lr (1.0 = constant).",
+    )
     gpt.add_argument("--batch-size", type=int, default=16, help="Windows per step.")
     gpt.add_argument("--block-size", type=int, default=64, help="Context window in tokens.")
     gpt.add_argument("--embed-dim", type=int, default=64)
@@ -79,6 +102,80 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--temperature", type=float, default=1.0, help="0 = greedy.")
     generate.add_argument("--seed", type=int, help="Fix for reproducible output.")
 
+    make_math = subcommands.add_parser(
+        "make-math-data", help="Write addition problems to train on, plus a hidden exam."
+    )
+    make_math.add_argument("--out", default="data/math.txt", help="The training text.")
+    make_math.add_argument("--digits", type=int, default=2, help="Digits per number (1-3).")
+    make_math.add_argument(
+        "--holdout", type=float, default=0.1, help="Share of problems kept out of training."
+    )
+    make_math.add_argument("--lines", type=int, default=400_000, help="Training lines to write.")
+    make_math.add_argument(
+        "--reverse", action="store_true", help="Write answer digits backwards (49+97=641)."
+    )
+    make_math.add_argument(
+        "--pad", action="store_true", help="Zero-pad every number to the same width (05+12=017)."
+    )
+    make_math.add_argument("--seed", type=int, default=0)
+
+    eval_math = subcommands.add_parser(
+        "eval-math", help="Grade a MiniGPT on addition: exact-match accuracy (needs torch)."
+    )
+    eval_math.add_argument("--model", required=True, help="A MiniGPT checkpoint (.pt).")
+    eval_math.add_argument(
+        "--holdout", default="data/math-holdout.txt", help="Problems the model never saw."
+    )
+    eval_math.add_argument(
+        "--seen", default="data/math-seen.txt", help="Problems it trained on (the control)."
+    )
+    eval_math.add_argument("--limit", type=int, help="Grade only the first N problems of each.")
+
+    collect = subcommands.add_parser(
+        "collect-code", help="Gather Python source from this machine into one training text."
+    )
+    collect.add_argument("--out", default="data/python.txt")
+    collect.add_argument(
+        "--root",
+        action="append",
+        help="A folder to read .py files from (repeatable). Default: the standard library "
+        "plus the installed packages in forgelm.data.DEFAULT_PACKAGES.",
+    )
+    collect.add_argument("--max-mb", type=float, default=60.0, help="Stop at about this size.")
+    collect.add_argument("--seed", type=int, default=0, help="Seeds the file shuffle.")
+
+    mix = subcommands.add_parser(
+        "make-mix",
+        help="Blend stories, Python and arithmetic into one tagged training text.",
+    )
+    mix.add_argument("--stories", help="A TinyStories text file.")
+    mix.add_argument("--code", help="The text written by collect-code.")
+    mix.add_argument("--math", help="The training text written by make-math-data.")
+    mix.add_argument("--stories-mb", type=float, default=20.0)
+    mix.add_argument("--code-mb", type=float, default=40.0)
+    mix.add_argument("--math-mb", type=float, default=4.0)
+    mix.add_argument("--out", default="data/mix.txt")
+    mix.add_argument("--seed", type=int, default=0)
+
+    eval_code = subcommands.add_parser(
+        "eval-code",
+        help="Grade a MiniGPT on writing Python: does it parse? (needs torch)",
+    )
+    eval_code.add_argument("--model", required=True, help="A MiniGPT checkpoint (.pt).")
+    eval_code.add_argument(
+        "--corpus", default="data/python.txt", help="The text from collect-code."
+    )
+    eval_code.add_argument("--samples", type=int, default=40, help="Files to generate.")
+    eval_code.add_argument("--length", type=int, default=400, help="Characters per sample.")
+    eval_code.add_argument("--temperature", type=float, default=0.7)
+    eval_code.add_argument("--seed", type=int, default=0)
+    eval_code.add_argument(
+        "--val-fraction", type=float, default=0.1, help="Must match the training run."
+    )
+    eval_code.add_argument(
+        "--show", type=int, default=1, help="How many generated samples to print."
+    )
+
     return parser
 
 
@@ -99,6 +196,32 @@ def format_train_report(r: TrainReport) -> str:
             f" (perplexity {math.exp(r.baseline_loss):.1f})",
             f"train loss {r.train_loss:.3f} | val loss {r.val_loss:.3f}"
             f" (perplexity {math.exp(r.val_loss):.1f})",
+        ]
+    )
+
+
+def format_math_report(label: str, report) -> str:
+    """The overall score, then the same score per kind of problem, then a few wrong answers."""
+    lines = [f"{label}: {report.correct}/{report.total} = {100 * report.accuracy:.1f}%"]
+    for name, group in sorted(report.groups.items()):
+        lines.append(
+            f"    {name:<36} {group.correct:>5}/{group.total:<5} = {100 * group.accuracy:5.1f}%"
+        )
+    lines += [
+        f"    wrong: {miss.prompt}  expected {miss.expected!r}  got {miss.got!r}"
+        for miss in report.misses[:5]
+    ]
+    return "\n".join(lines)
+
+
+def format_code_report(report, length: int, samples: int, references: int) -> str:
+    return "\n".join(
+        [
+            f"generated {report.generated:.3f}   ({samples} samples of up to {length} characters)",
+            f"ceiling   {report.ceiling:.3f}   (real held-out code, cut alike: {references})",
+            f"floor     {report.floor:.3f}   (the same real code with its characters shuffled)",
+            f"position  {report.position:.2f}    (0 = no better than shuffled characters, "
+            "1 = as parseable as real code)",
         ]
     )
 
@@ -215,6 +338,8 @@ def main(argv: list[str] | None = None) -> int:
                 eval_batches=args.eval_batches,
                 device=args.device,
                 seed=args.seed,
+                warmup_steps=args.warmup_steps,
+                min_lr_fraction=args.min_lr_fraction,
             )
         except (ValueError, FloatingPointError) as exc:
             parser.error(str(exc))
@@ -269,6 +394,135 @@ def main(argv: list[str] | None = None) -> int:
                 args.temperature,
             )
         print(tokenizer.decode(ids))
+        return 0
+
+    if args.command == "make-math-data":
+        try:
+            data = build_math_dataset(
+                args.digits, args.holdout, args.lines, args.reverse, args.seed, pad=args.pad
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        files = {
+            out: data.corpus,
+            out.with_name(f"{out.stem}-holdout{out.suffix}"): data.holdout,
+            out.with_name(f"{out.stem}-seen{out.suffix}"): data.seen,
+        }
+        for path, text in files.items():
+            path.write_text(text, encoding="utf-8")
+            print(f"wrote {path}  ({len(text.splitlines()):,} lines)")
+        print(
+            f"{data.train_problems:,} problems can appear in training; "
+            f"{data.holdout_problems:,} are hidden and only used for the exam"
+        )
+        return 0
+
+    if args.command == "eval-math":
+        try:
+            from forgelm.eval import greedy_completer, math_accuracy
+            from forgelm.models.minigpt import load_minigpt
+
+            model, tokenizer = load_minigpt(args.model)
+        except ImportError:
+            parser.error('PyTorch is not installed; see README ("pip install -e .[ml]")')
+        except (OSError, ValueError, KeyError) as exc:
+            parser.error(f"cannot load model: {exc}")
+        complete = greedy_completer(model, tokenizer)
+        for label, path in (("hidden", args.holdout), ("seen", args.seen)):
+            try:
+                problems = parse_problems(read_text_file(parser, path))
+            except ValueError as exc:
+                parser.error(f"{path}: {exc}")
+            if args.limit is not None:
+                problems = problems[: args.limit]
+            if not problems:
+                parser.error(f"{path} contains no problems")
+            print(format_math_report(label, math_accuracy(problems, complete)))
+        return 0
+
+    if args.command == "collect-code":
+        roots = [Path(root) for root in args.root] if args.root else default_roots()
+        files = collect_python(roots)
+        if not files:
+            parser.error("no usable .py files found under: " + ", ".join(map(str, roots)))
+        corpus = build_code_corpus(files, int(args.max_mb * 1_000_000), args.seed)
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(corpus, encoding="utf-8")
+        print(
+            f"{len(files):,} distinct files from {len(roots)} folders; wrote "
+            f"{corpus.count(FILE_MARKER):,} of them: {len(corpus) / 1e6:.1f} MB, "
+            f"{len(set(corpus))} distinct characters -> {out}"
+        )
+        return 0
+
+    if args.command == "make-mix":
+        makers = {
+            "story": (args.stories, args.stories_mb, story_documents),
+            "code": (args.code, args.code_mb, code_documents),
+            "math": (args.math, args.math_mb, math_documents),
+        }
+        sources, budgets = {}, {}
+        for name, (path, megabytes, to_documents) in makers.items():
+            if path is None:
+                continue
+            if megabytes <= 0:
+                parser.error(f"--{name if name != 'story' else 'stories'}-mb must be > 0")
+            sources[name] = to_documents(read_text_file(parser, path))
+            budgets[name] = int(megabytes * 1_000_000)
+        if not sources:
+            parser.error("give at least one of --stories, --code, --math")
+        try:
+            mix = mix_documents(sources, budgets, args.seed)
+        except ValueError as exc:
+            parser.error(str(exc))
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(mix.text, encoding="utf-8")
+        for name in sorted(mix.documents):
+            share = 100 * mix.chars[name] / max(len(mix.text), 1)
+            print(
+                f"{name:<6} {mix.documents[name]:>8,} documents "
+                f"{mix.chars[name] / 1e6:>7.1f} MB  {share:4.1f}%"
+            )
+        print(
+            f"wrote {out}: {len(mix.text) / 1e6:.1f} MB, {len(set(mix.text))} distinct characters"
+        )
+        return 0
+
+    if args.command == "eval-code":
+        if args.samples < 1 or args.length < 1:
+            parser.error("--samples and --length must be >= 1")
+        if not 0 < args.val_fraction < 1:
+            parser.error("--val-fraction must be between 0 and 1")
+        try:
+            from forgelm.eval import grade_code, real_snippets, sample_code
+            from forgelm.models.minigpt import load_minigpt
+
+            model, tokenizer = load_minigpt(args.model)
+        except ImportError:
+            parser.error('PyTorch is not installed; see README ("pip install -e .[ml]")')
+        except (OSError, ValueError, KeyError) as exc:
+            parser.error(f"cannot load model: {exc}")
+        corpus = read_text_file(parser, args.corpus)
+        # Real code from the part of the corpus the model was *not* trained on: the tail,
+        # which is the validation split of train-minigpt. The file cut by the boundary is
+        # half seen, so the first marker after the boundary is where clean files start.
+        tail = corpus[int(len(corpus) * (1 - args.val_fraction)) :]
+        start = tail.find(FILE_MARKER)
+        if start < 0:
+            parser.error("the held-out part of the corpus holds no complete file")
+        references = real_snippets(split_files(tail[start:]), args.length, args.samples, args.seed)
+        samples = sample_code(
+            model, tokenizer, args.samples, args.length, args.temperature, args.seed
+        )
+        report = grade_code(samples, references, args.seed)
+        print(format_code_report(report, args.length, len(samples), len(references)))
+        for number, sample in enumerate(samples[: max(args.show, 0)], 1):
+            print(f"--- sample {number} ---")
+            print(sample)
         return 0
 
     parser.print_help()
