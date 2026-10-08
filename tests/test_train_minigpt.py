@@ -202,3 +202,58 @@ def test_train_raises_when_the_loss_blows_up():
 def test_train_rejects_a_corpus_shorter_than_one_window():
     with pytest.raises(ValueError, match="need at least"):
         train_minigpt([0, 1, 2], [0, 1, 2], vocab_size=4, block_size=8, device="cpu")
+
+
+# --- the progress callback (Sprint 4b) ----------------------------------------------------
+
+
+def test_on_progress_is_called_at_every_evaluation():
+    seen = []
+
+    _, history = train_minigpt(
+        list(range(60)),
+        list(range(60)),
+        vocab_size=60,
+        steps=4,
+        eval_every=2,
+        batch_size=2,
+        on_progress=lambda *args: seen.append(args),
+        **TINY,
+    )
+
+    # Evaluations happen at 0, 2 and then once more at the end.
+    assert [step for step, _, _ in seen] == [0, 2, 4]
+    assert [step for step, _, _ in seen] == history.steps
+    assert [train for _, train, _ in seen] == history.train_loss
+    assert [val for _, _, val in seen] == history.val_loss
+
+
+def test_training_without_a_callback_is_unchanged():
+    # The callback is optional: the default path must stay exactly as it was.
+    common = dict(steps=4, eval_every=2, batch_size=2, seed=3, **TINY)
+    ids = list(range(60))
+
+    _, quiet = train_minigpt(ids, ids, vocab_size=60, **common)
+    _, loud = train_minigpt(ids, ids, vocab_size=60, on_progress=lambda *a: None, **common)
+
+    assert quiet.steps == loud.steps
+    assert quiet.train_loss == loud.train_loss
+    assert quiet.val_loss == loud.val_loss
+
+
+def test_a_callback_that_raises_stops_the_training():
+    # Nothing is swallowed: a broken callback is the caller's bug and must surface.
+    def boom(step, train_loss, val_loss):
+        raise RuntimeError("callback is broken")
+
+    with pytest.raises(RuntimeError, match="broken"):
+        train_minigpt(
+            list(range(60)),
+            list(range(60)),
+            vocab_size=60,
+            steps=4,
+            eval_every=2,
+            batch_size=2,
+            on_progress=boom,
+            **TINY,
+        )

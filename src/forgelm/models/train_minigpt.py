@@ -12,6 +12,7 @@ Requires the optional `ml` extra (torch).
 
 import math
 import time
+from collections.abc import Callable
 
 import torch
 
@@ -128,7 +129,14 @@ def train_minigpt(
     eval_batches: int = 4,
     device: str = "auto",
     seed: int = 0,
+    on_progress: Callable[[int, float, float], None] | None = None,
 ) -> tuple[MiniGPT, TrainHistory]:
+    """Train a MiniGPT, returning the model and the loss history.
+
+    `on_progress(step, train_loss, val_loss)` is called at every evaluation, so a caller
+    can show the losses *while* training runs instead of after it. This module knows
+    nothing about terminals or HTTP: the caller decides what to do with the numbers.
+    """
     if steps < 1 or batch_size < 1 or eval_every < 1 or eval_batches < 1:
         raise ValueError("steps, batch_size, eval_every and eval_batches must be >= 1")
 
@@ -144,9 +152,13 @@ def train_minigpt(
     history = TrainHistory(device=dev)
 
     def record(step: int) -> None:
+        train_loss = estimate_loss(model, train, batch_size, eval_batches, eval_gen)
+        val_loss = estimate_loss(model, val, batch_size, eval_batches, eval_gen)
         history.steps.append(step)
-        history.train_loss.append(estimate_loss(model, train, batch_size, eval_batches, eval_gen))
-        history.val_loss.append(estimate_loss(model, val, batch_size, eval_batches, eval_gen))
+        history.train_loss.append(train_loss)
+        history.val_loss.append(val_loss)
+        if on_progress is not None:
+            on_progress(step, train_loss, val_loss)
 
     start = time.perf_counter()
     for step in range(steps):

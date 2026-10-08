@@ -194,9 +194,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.embed_dim % args.heads != 0:
             parser.error("--embed-dim must be divisible by --heads")
         text = read_text_file(parser, args.corpus)
+
+        def show(step: int, train_loss: float, val_loss: float) -> None:
+            # Printed while training runs; 2000 steps are minutes of silence otherwise.
+            print(f"step {step:>5} | train {train_loss:.3f} | val {val_loss:.3f}", flush=True)
+
         try:
             model, tokenizer, history = train_minigpt_on_text(
                 text,
+                on_progress=show,
                 val_fraction=args.val_fraction,
                 steps=args.steps,
                 lr=args.lr,
@@ -212,18 +218,15 @@ def main(argv: list[str] | None = None) -> int:
             )
         except (ValueError, FloatingPointError) as exc:
             parser.error(str(exc))
+        # The step lines were printed live by `show`; what is left is the summary.
         print(
             f"device {device_name(history.device)} | vocab {model.vocab_size}"
             f" | params {model.num_parameters():,} | context {model.block_size} tokens"
         )
-        print(f"uniform baseline loss {math.log(model.vocab_size):.3f}")
-        for step, train_loss, val_loss in zip(
-            history.steps, history.train_loss, history.val_loss, strict=True
-        ):
-            print(f"step {step:>5} | train {train_loss:.3f} | val {val_loss:.3f}")
         print(
             f"trained in {history.seconds:.1f}s | final val loss {history.val_loss[-1]:.3f}"
             f" (perplexity {math.exp(history.val_loss[-1]):.1f})"
+            f" | uniform baseline loss {math.log(model.vocab_size):.3f}"
         )
         save_minigpt(args.out, model, tokenizer)
         print(f"saved {args.out}")

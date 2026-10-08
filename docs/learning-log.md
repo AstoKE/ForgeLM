@@ -768,3 +768,69 @@ hint about the model, not an explanation.
 
 ### Open questions
 - _(fill in)_
+
+---
+
+## Sprint 4b-1: Training in the background (2026-10-08)
+
+### Concepts
+- An HTTP request must answer in milliseconds; training takes minutes. Training inside the
+  handler leaves the browser spinning until it times out, and the page can show nothing
+- **The ticket pattern**: `POST /train` starts the work and returns a job id straight away
+  (**202 Accepted** = started, not finished). `GET /train/{id}` answers "where are you?"
+- **Polling, not WebSocket/SSE**: a plain `GET` once a second. No new protocol, trivial to test
+  with `TestClient`, and a loss curve refreshed once a second does not need push
+- **A progress callback is inversion of control**: `train_minigpt` must not know about terminals
+  or HTTP, so the caller hands it `on_progress(step, train_loss, val_loss)` and decides what to
+  do with the numbers. The hook point already existed: the `record(step)` closure
+- **The GIL question**: Python threads cannot run bytecode in parallel, but torch releases the
+  GIL inside its C++ kernels, so training really progresses while FastAPI answers. A
+  pure-Python training loop would need a separate process
+- A thread that raises **dies silently**, so a failed run must be *recorded* (`status = "failed"`
+  plus the exception text), never left to vanish
+- One run at a time (**409 Conflict**): two runs would compete for the same CPU/GPU and both
+  would crawl ([ADR 0007](decisions/0007-background-training-jobs.md))
+
+### What we built
+- `train_minigpt(..., on_progress=...)`, called at every evaluation
+- The CLI passes a callback that prints each line as it happens. Before this, `forgelm
+  train-minigpt` printed the whole history *after* training: 213 seconds of silence, then 21
+  lines at once
+- `forgelm/training/jobs.py`: `TrainingJobStore` with `start` / `get` / `latest` / `wait`, one
+  `threading.Lock` for the job dict and every job's fields
+- `GET /corpora`, `POST /train` (202), `GET /train/{id}`, and a 409 handler for `JobBusy`
+- 42 new tests (282 total): the 4a path-traversal rule applied to the corpus *and* the output
+  name, every hyperparameter capped, a real failed run, a refused second run, an unknown job id,
+  and the 4b payoff - train through the API, then generate from what was just trained
+
+### Experiment: is the callback really live?
+200 steps on 60 KB of Shakespeare, recording wall-clock time at each callback:
+```
+t=  0.0s  step    0  val 4.456
+t=  0.8s  step   50  val 3.040
+t=  1.5s  step  100  val 2.968
+t=  2.2s  step  150  val 2.659
+t=  3.0s  step  200  val 2.703      (total 3.0s)
+```
+Evenly spread across the run, so the numbers arrive *while* training happens, not after.
+
+Also retrained the 3d model to have a checkpoint again: 211,584 params, 2000 steps, 213.8 s on
+CPU, val **1.867** (perplexity 6.5) against the bigram's 2.482 (12). The logged run got 1.853;
+the difference is inside the +-0.05 wobble of an 8-window val estimate.
+
+### Mistakes / surprises
+- A test used `lr = 1e30` to force a failure, but pydantic caps `lr` at 1, so the request was
+  rejected with 422 and the test got a `KeyError` on `job["id"]`. Replaced with a three-character
+  corpus: the *request* is valid, so the run fails only after the thread has started -- which is
+  exactly the path the test is meant to cover
+- In block 0 / head 0 of the retrained model, the weights sit one cell left of the diagonal
+  (`O -> R`, `M -> O`, `E -> M`, `: -> O`, all 0.85-0.99): a **previous-token head**, a bigram
+  learned inside the transformer. The 4a run had that head on the diagonal instead. Same seed,
+  same hyperparameters, different specialisation -- which head takes which job is not in the
+  architecture, it falls out of training
+
+### Lessons
+- _(fill in, in your own words)_
+
+### Open questions
+- _(fill in)_

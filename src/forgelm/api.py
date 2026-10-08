@@ -6,7 +6,7 @@ in other modules so it can be tested without a web server.
 
 import os
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -25,6 +25,7 @@ from forgelm.inference import (
     generate_text,
 )
 from forgelm.tokenizer import Analysis, TokenizerKind, analyze, build_tokenizer
+from forgelm.training import MAX_STEPS, JobBusy, JobNotFoundError, TrainingJob, TrainingJobStore
 
 # BPE training is O(num_merges x corpus length). Without limits, one request
 # could keep the server busy for minutes.
@@ -116,6 +117,81 @@ def generate(request: GenerateRequest, store: Store) -> GenerateResult:
 @app.post("/attention")
 def attention(request: AttentionRequest, store: Store) -> AttentionResult:
     return attention_maps(store, request.model, request.text)
+
+
+# --- Training in the background (Sprint 4b) -----------------------------------------------
+
+_jobs = TrainingJobStore(
+    os.environ.get("FORGELM_CORPUS_DIR", "data"),
+    os.environ.get("FORGELM_CHECKPOINT_DIR", "checkpoints"),
+)
+
+
+def get_jobs() -> TrainingJobStore:
+    """A dependency, so tests can swap in a store over temporary folders."""
+    return _jobs
+
+
+Jobs = Annotated[TrainingJobStore, Depends(get_jobs)]
+
+
+@app.exception_handler(JobNotFoundError)
+def job_not_found(_: Request, exc: JobNotFoundError) -> JSONResponse:
+    return JSONResponse({"detail": str(exc)}, status_code=404)
+
+
+@app.exception_handler(JobBusy)
+def job_busy(_: Request, exc: JobBusy) -> JSONResponse:
+    # 409 Conflict: the request is fine, the server is just not free to do it now.
+    return JSONResponse({"detail": str(exc)}, status_code=409)
+
+
+class TrainRequest(BaseModel):
+    """Hyperparameters, all capped: this endpoint is reachable from a browser."""
+
+    corpus: str = Field(max_length=200)  # a file name in the corpus folder, never a path
+    out: str = Field(default="minigpt.pt", max_length=200)
+    steps: int = Field(default=500, ge=1, le=MAX_STEPS)
+    lr: float = Field(default=3e-3, gt=0, le=1)
+    batch_size: int = Field(default=16, ge=1, le=64)
+    block_size: int = Field(default=64, ge=1, le=256)
+    embed_dim: int = Field(default=64, ge=1, le=256)
+    num_heads: int = Field(default=4, ge=1, le=16)
+    num_blocks: int = Field(default=4, ge=1, le=8)
+    eval_every: int = Field(default=50, ge=1, le=MAX_STEPS)
+    seed: int = 0
+    device: Literal["auto", "cpu", "cuda"] = "auto"
+
+
+@app.get("/corpora")
+def list_corpora(jobs: Jobs) -> list[str]:
+    """The texts available to train on, so the page can offer a list."""
+    return jobs.list_corpora()
+
+
+@app.post("/train", status_code=202)
+def train(request: TrainRequest, jobs: Jobs) -> TrainingJob:
+    """Start a run and return its ticket. 202 Accepted: started, not finished."""
+    return jobs.start(
+        request.corpus,
+        out=request.out,
+        steps=request.steps,
+        lr=request.lr,
+        batch_size=request.batch_size,
+        block_size=request.block_size,
+        embed_dim=request.embed_dim,
+        num_heads=request.num_heads,
+        num_blocks=request.num_blocks,
+        eval_every=request.eval_every,
+        device=request.device,
+        seed=request.seed,
+    )
+
+
+@app.get("/train/{job_id}")
+def train_status(job_id: str, jobs: Jobs) -> TrainingJob:
+    """Where is the run? The page polls this and redraws the loss curve."""
+    return jobs.get(job_id)
 
 
 @app.get("/ui", response_class=HTMLResponse)
